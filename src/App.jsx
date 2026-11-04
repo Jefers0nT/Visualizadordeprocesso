@@ -1,0 +1,476 @@
+import { useState, useMemo, useRef } from 'react';
+import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight } from 'lucide-react';
+import { toast, Toaster } from 'sonner';
+
+const decode = (buf) => {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return new TextDecoder('windows-1252').decode(buf);
+  }
+};
+
+function parseCSV(text) {
+  text = text.replace(/^\uFEFF/, '');
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+    } else if (char === ';') {
+      row.push(field);
+      field = '';
+    } else if (char === '\n') {
+      row.push(field.replace(/\r$/, ''));
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += char;
+    }
+  }
+
+  if (field || row.length) {
+    row.push(field.replace(/\r$/, ''));
+    rows.push(row);
+  }
+
+  const headers = (rows.shift() || []).map((s) => s.trim());
+  const data = rows
+    .filter((r) => r.length > 1)
+    .map((r) => {
+      const obj = {};
+      headers.forEach((key, index) => {
+        if (!(key in obj)) obj[key] = (r[index] || '').trim();
+      });
+      return obj;
+    });
+
+  return { headers, data };
+}
+
+const num = (value) => {
+  const n = parseFloat(String(value || '0').replace(/\./g, '').replace(',', '.'));
+  return Number.isNaN(n) ? 0 : n;
+};
+
+const dt = (value) => (/[\d]/.test(value || '') ? value : '');
+const normalizeHeader = (value) =>
+  String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+const getField = (row, header) => {
+  const normalizedHeader = normalizeHeader(header);
+  const key = Object.keys(row).find((candidate) => normalizeHeader(candidate) === normalizedHeader);
+  return key ? row[key] : '';
+};
+const percent = (reported, total) =>
+  `${Number((total > 0 ? Math.min((reported / total) * 100, 100) : 0).toFixed(1))}%`;
+const isPendingOp = (op) => op.steps.every((step) => step.reported === 0);
+
+function dateSortValue(value) {
+  const date = String(value || '').trim();
+  const dmy = date.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
+  const ymd = date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  let year, month, day;
+
+  if (dmy) {
+    [, day, month, year] = dmy;
+    if (year.length === 2) year = `20${year}`;
+  } else if (ymd) {
+    [, year, month, day] = ymd;
+  } else {
+    const parsed = Date.parse(date);
+    return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+  }
+
+  return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+}
+
+const compareByEmission = (a, b) =>
+  dateSortValue(a.emissao) - dateSortValue(b.emissao) || String(a.num).localeCompare(String(b.num));
+
+function buildTree(ops, ordens) {
+  const ordMap = new Map(ordens.map((order) => [
+    String(getField(order, 'Ord Prod')).trim(),
+    order,
+  ]));
+  const byOp = new Map();
+
+  ops.forEach((row) => {
+    const key = row['Numero da OP'];
+    if (!byOp.has(key)) byOp.set(key, []);
+    byOp.get(key).push(row);
+  });
+
+  const jobs = new Map();
+
+  byOp.forEach((rows, key) => {
+    rows.sort((a, b) => num(b['Sequencia']) - num(a['Sequencia']));
+    const final = rows[rows.length - 1];
+    const job = (rows.find((r) => r['Job de Corte']) || {})['Job de Corte'] || '';
+
+    const steps = rows.map((row) => {
+      const order = ordMap.get(String(getField(row, 'OP')).trim()) || {};
+      const qtd = num(order['Quantidade'] !== undefined && order['Quantidade'] !== '' ? order['Quantidade'] : row['Quantidade']);
+      const reported = num(order['Quant Rep']);
+
+      return {
+        ord: row['OP'],
+        item: row['Produto'],
+        sigla: order['Grup Estoque'] || row['Produto'].slice(5, 7),
+        desc: (order['Descrição GE'] || '').replace(/\s+/g, ' '),
+        qtd,
+        reported,
+        st: reported > 0 ? 'Concluída' : 'Pendente',
+        emissao: dt(getField(order, 'DT Emissão') || getField(row, 'DT Emissão')),
+        inicio: dt(order['Inicio Ordem']),
+        fim: dt(order['Fim Ordem']),
+      };
+    });
+
+    const op = {
+      num: key,
+      job,
+      desc: final['Desc Prod'],
+      qtd: num(final['Quantidade']),
+      entrega: dt(final['Entrega']),
+      steps,
+      emissao: steps.map((step) => step.emissao).filter(Boolean).sort(
+        (a, b) => dateSortValue(a) - dateSortValue(b),
+      )[0] || '',
+      totalQty: steps.reduce((sum, step) => sum + step.qtd, 0),
+      reportedQty: steps.reduce((sum, step) => sum + step.reported, 0),
+    };
+
+    if (!jobs.has(job)) jobs.set(job, []);
+    jobs.get(job).push(op);
+  });
+
+  jobs.forEach((jobOps) => jobOps.sort(compareByEmission));
+
+  return Array.from(jobs.entries()).sort(([jobA, opsA], [jobB, opsB]) => {
+    const dateA = Math.min(...opsA.map((op) => dateSortValue(op.emissao)));
+    const dateB = Math.min(...opsB.map((op) => dateSortValue(op.emissao)));
+    return dateA - dateB || jobA.localeCompare(jobB);
+  });
+}
+
+const STYLE = {
+  Concluída: { border: 'step-concluida', badge: 'badge-concluida', seg: 'segment-concluida' },
+  Pendente: { border: 'step-pendente', badge: 'badge-pendente', seg: 'segment-pendente' },
+  default: { border: 'step-default', badge: 'badge-default', seg: 'segment-default' },
+};
+
+const sty = (status) => STYLE[status] || STYLE.default;
+
+function StepNode({ s }) {
+  const c = sty(s.st);
+
+  return (
+    <div className={`step-node ${c.border}`} title={`Ordem ${s.ord} · Quant Rep/Quantidade`}>
+      <span className="step-sigla">{s.sigla}</span>
+      <span className="step-desc">{s.desc || s.item}</span>
+      <span className="step-detail">Produto: {s.item}</span>
+      <span className="step-detail">Quantidade: {s.qtd}</span>
+      <span className="step-qty">{percent(s.reported, s.qtd)} reportado</span>
+      {s.emissao && <span className="step-date">DT Emissão {s.emissao}</span>}
+      {s.inicio && <span className="step-date">Início Ordem {s.inicio}</span>}
+      {s.fim && <span className="step-date">Fim {s.fim}</span>}
+      <span className={`step-status ${c.badge}`}>{s.st}</span>
+    </div>
+  );
+}
+
+function OpCard({ op }) {
+  const done = op.steps.filter((s) => s.st === 'Concluída').length;
+
+  return (
+    <details open className="op-card">
+      <summary className="op-summary">
+        <span className="op-title">
+          <ChevronRight className="chevron" />
+          OP {op.num}
+        </span>
+        <span className="op-desc">{op.desc}</span>
+        <span className="op-meta">
+          {percent(op.reportedQty, op.totalQty)} · {done}/{op.steps.length} etapas concluídas
+        </span>
+        <span className="op-emissao">DT Emissão: {op.emissao || '—'}</span>
+        <span className="progress-bar">
+          {op.steps.map((s, index) => (
+            <i key={`${s.ord}-${index}`} className={`progress-seg ${sty(s.st).seg}`} />
+          ))}
+        </span>
+      </summary>
+
+      <div className="step-flow">
+        {op.steps.map((s, index) => (
+          <div key={`${s.ord}-${index}`} className="flow-item-wrap">
+            {index > 0 && <span className="connector" />}
+            <StepNode s={s} />
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+export default function App() {
+  const [ops, setOps] = useState([]);
+  const [ordens, setOrdens] = useState([]);
+  const [search, setSearch] = useState('');
+  const [filtro, setFiltro] = useState('');
+  const [over, setOver] = useState(false);
+  const fileRef = useRef(null);
+  const dirRef = useRef(null);
+
+  const handleFiles = async (fileList) => {
+    const files = Array.from(fileList).filter((f) => /\.csv$/i.test(f.name));
+    let allOps = [];
+    let allOrdens = [];
+    let ignorados = 0;
+
+    for (const file of files) {
+      const parsed = parseCSV(decode(await file.arrayBuffer()));
+      if (parsed.headers.includes('Ord Prod')) {
+        allOrdens = allOrdens.concat(parsed.data);
+      } else if (parsed.headers.includes('Numero da OP')) {
+        allOps = allOps.concat(parsed.data);
+      } else {
+        ignorados += 1;
+      }
+    }
+
+    if (allOps.length) setOps(allOps);
+    if (allOrdens.length) setOrdens(allOrdens);
+
+    if (!allOps.length && !allOrdens.length) {
+      toast.error('Nenhum CSV reconhecido');
+      return;
+    }
+
+    toast.success(`${files.length - ignorados} arquivo(s) importado(s)`);
+    if (ignorados) {
+      toast.warning(`${ignorados} arquivo(s) ignorado(s): cabeçalho não reconhecido`);
+    }
+  };
+
+  const tree = useMemo(() => buildTree(ops, ordens), [ops, ordens]);
+  const allOps = useMemo(() => tree.flatMap(([, list]) => list), [tree]);
+  const allSteps = useMemo(() => allOps.flatMap((op) => op.steps), [allOps]);
+  const jobEmissions = useMemo(() => new Map(tree.map(([job, list]) => {
+    const dates = list.map((op) => op.emissao).filter(Boolean);
+    dates.sort((a, b) => dateSortValue(a) - dateSortValue(b));
+    return [job, dates[0] || ''];
+  })), [tree]);
+
+  const stats = {
+    jobs: tree.filter(([job]) => job).length,
+    ops: allOps.length,
+    etapas: allSteps.length,
+    pendentes: tree.filter(
+      ([job, list]) => job && list.every(isPendingOp),
+    ).length,
+    concluidas: allSteps.filter((s) => s.st === 'Concluída').length,
+  };
+
+  const q = search.trim().toLowerCase();
+  const visible = useMemo(() => {
+    const match = (op) =>
+      !q ||
+      [op.num, op.job, op.desc, ...op.steps.map((s) => `${s.ord} ${s.item} ${s.sigla} ${s.desc}`)]
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+
+    return tree
+      .map(([job, list]) => [
+        job,
+        list.filter((op) => {
+          const matchesStatus = !filtro || (
+            filtro === 'Pendente' ? isPendingOp(op) : op.steps.some((step) => step.st === filtro)
+          );
+          return match(op) && matchesStatus;
+        }),
+      ])
+      .filter(([, list]) => list.length > 0);
+  }, [tree, q, filtro]);
+
+  const hasData = ops.length > 0;
+
+  return (
+    <div
+      className="app-shell"
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        handleFiles(event.dataTransfer.files);
+      }}
+    >
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div>
+            <h1 className="title">
+              <Network className="title-icon" />
+              Visualizador de Processo
+            </h1>
+            <p className="subtitle">Job de Corte → OP → Etapas, na ordem em que o processo acontece</p>
+          </div>
+
+          <div className="stats-grid">
+            {[
+              ['Jobs', stats.jobs],
+              ['OPs', stats.ops],
+              ['Etapas', stats.etapas],
+              ['Pendentes', stats.pendentes, 'accent-amber'],
+              ['Concluídas', stats.concluidas, 'accent-emerald'],
+            ].map(([label, value, className]) => (
+              <div key={label} className="stat-box">
+                <div className={`stat-value ${className || ''}`}>{value}</div>
+                <div className="stat-label">{label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      <main className="main-panel">
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv"
+          multiple
+          hidden
+          onChange={(event) => {
+            handleFiles(event.target.files);
+            event.target.value = '';
+          }}
+        />
+        <input
+          ref={dirRef}
+          type="file"
+          multiple
+          hidden
+          webkitdirectory=""
+          onChange={(event) => {
+            handleFiles(event.target.files);
+            event.target.value = '';
+          }}
+        />
+
+        {hasData && (
+          <div className="toolbar">
+            <div className="search-wrap">
+              <Search className="search-icon" />
+              <input
+                type="text"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Buscar por job, OP, produto, ordem, etapa..."
+                className="search-input"
+              />
+            </div>
+
+            <div className="filter-group">
+              {[['', 'Todas'], ['Pendente', 'Pendentes'], ['Concluída', 'Concluídas']].map(([value, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`filter-button ${filtro === value ? 'filter-button-active' : ''}`}
+                  onClick={() => setFiltro(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <button type="button" className="primary-button upload-button" onClick={() => fileRef.current?.click()}>
+              <FileSpreadsheet className="button-icon" />
+              Trocar arquivos
+            </button>
+          </div>
+        )}
+
+        {!hasData && (
+          <div className={`dropzone ${over ? 'dropzone-over' : ''}`}>
+            <h2>Solte aqui os arquivos CSV exportados</h2>
+            <p>
+              Pode soltar o relatório de OPs e o de Ordens de Produção juntos; cada um é reconhecido pelo cabeçalho.
+            </p>
+            <div className="dropzone-actions">
+              <button type="button" className="primary-button" onClick={() => fileRef.current?.click()}>
+                <FileSpreadsheet className="button-icon" />
+                Escolher arquivos
+              </button>
+
+              <button type="button" className="secondary-button" onClick={() => dirRef.current?.click()}>
+                <FolderOpen className="button-icon" />
+                Escolher pasta "Ordens de produção"
+              </button>
+            </div>
+          </div>
+        )}
+
+        {hasData && !ordens.length && (
+          <p className="helper-text">Falta o relatório de Ordens de Produção: as etapas aparecem sem status.</p>
+        )}
+
+        {hasData && visible.length === 0 && (
+          <div className="empty-state">
+            <p>Nenhuma OP encontrada</p>
+          </div>
+        )}
+
+        <div className="job-list">
+          {visible.map(([job, list]) => {
+            const totalQty = list.reduce((sum, op) => sum + op.totalQty, 0);
+            const reportedQty = list.reduce((sum, op) => sum + op.reportedQty, 0);
+
+            return (
+              <details key={job || 'sem-job'} className="job-group">
+                <summary className="job-header">
+                  <ChevronRight className="job-chevron" />
+                  {job ? `Job ${job}` : 'Sem job de corte'}
+                  <span className="job-count">{list.length} OP(s)</span>
+                  {jobEmissions.get(job) && (
+                    <span className="job-emissao">Emissão {jobEmissions.get(job)}</span>
+                  )}
+                  <span className="job-percent">{percent(reportedQty, totalQty)} concluído</span>
+                </summary>
+
+                <div className="job-body">
+                  {list.map((op) => (
+                    <OpCard key={op.num} op={op} />
+                  ))}
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      </main>
+
+      <Toaster richColors position="top-right" />
+    </div>
+  );
+}
