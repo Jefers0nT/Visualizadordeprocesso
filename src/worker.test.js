@@ -32,6 +32,7 @@ class FakeD1 {
   snapshots = new Map();
   chunks = [];
   activeSnapshotId = null;
+  datasetReadPages = 0;
 
   prepare(query) {
     return new FakeStatement(this, query);
@@ -92,11 +93,18 @@ class FakeD1 {
   }
 
   async all(query, values) {
-    if (query.startsWith('SELECT kind, payload FROM dataset_chunks')) {
+    if (query.startsWith('SELECT chunk_index, payload FROM dataset_chunks')) {
+      assert.match(query, /LIMIT \?/);
+      this.datasetReadPages += 1;
       const results = this.chunks
-        .filter((chunk) => chunk.snapshotId === values[0])
-        .sort((a, b) => a.kind.localeCompare(b.kind) || a.chunkIndex - b.chunkIndex)
-        .map(({ kind, payload }) => ({ kind, payload }));
+        .filter((chunk) =>
+          chunk.snapshotId === values[0]
+          && chunk.kind === values[1]
+          && chunk.chunkIndex >= values[2],
+        )
+        .sort((a, b) => a.chunkIndex - b.chunkIndex)
+        .slice(0, values[3])
+        .map(({ chunkIndex, payload }) => ({ chunk_index: chunkIndex, payload }));
       return { results };
     }
     throw new Error(`Unsupported fake D1 query: ${query}`);
@@ -166,6 +174,35 @@ test('admin can publish a dataset that persists for later reads', async () => {
   assert.deepEqual(dataset.ops, ops);
   assert.deepEqual(dataset.ordens, []);
   assert.ok(dataset.updatedAt);
+});
+
+test('large shared datasets are read from D1 in bounded pages', async () => {
+  const bindings = env();
+  const db = bindings.DB;
+  const snapshotId = 'large-snapshot';
+  db.activeSnapshotId = snapshotId;
+  db.snapshots.set(snapshotId, new Date().toISOString());
+  for (const kind of ['ops', 'ordens']) {
+    for (let chunkIndex = 0; chunkIndex < 201; chunkIndex += 1) {
+      db.chunks.push({
+        snapshotId,
+        kind,
+        chunkIndex,
+        payload: JSON.stringify([{ id: `${kind}-${chunkIndex}` }]),
+      });
+    }
+  }
+
+  const { cookie } = await login(bindings, bindings.VIEWER_PASSWORD);
+  const read = await request('/api/data', { db: bindings, cookie });
+  const dataset = await read.json();
+
+  assert.equal(read.status, 200);
+  assert.equal(dataset.ops.length, 201);
+  assert.equal(dataset.ordens.length, 201);
+  assert.equal(dataset.ops[200].id, 'ops-200');
+  assert.equal(dataset.ordens[200].id, 'ordens-200');
+  assert.equal(db.datasetReadPages, 34);
 });
 
 test('login limits repeated failed attempts from the same address', async () => {

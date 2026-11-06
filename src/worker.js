@@ -1,6 +1,7 @@
 const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
 const ROWS_PER_CHUNK = 100;
+const READ_CHUNKS_PER_QUERY = 12;
 const STATEMENTS_PER_BATCH = 50;
 const SESSION_DURATION_SECONDS = 8 * 60 * 60;
 const SESSION_COOKIE = 'visualizador_session';
@@ -178,16 +179,26 @@ async function readDataset(db) {
     .first();
   if (!snapshot) throw new Error('Active dataset snapshot is missing');
 
-  const result = await db
-    .prepare('SELECT kind, payload FROM dataset_chunks WHERE snapshot_id = ? ORDER BY kind, chunk_index')
-    .bind(active.snapshot_id)
-    .all();
-
   const dataset = { ops: [], ordens: [], updatedAt: snapshot.created_at };
-  for (const chunk of result.results) {
-    const rows = JSON.parse(chunk.payload);
-    if (chunk.kind === 'ops') dataset.ops.push(...rows);
-    if (chunk.kind === 'ordens') dataset.ordens.push(...rows);
+  for (const kind of ['ops', 'ordens']) {
+    let nextChunkIndex = 0;
+    while (true) {
+      const result = await db
+        .prepare(`
+          SELECT chunk_index, payload FROM dataset_chunks
+          WHERE snapshot_id = ? AND kind = ? AND chunk_index >= ?
+          ORDER BY chunk_index LIMIT ?
+        `)
+        .bind(active.snapshot_id, kind, nextChunkIndex, READ_CHUNKS_PER_QUERY)
+        .all();
+      if (!result.results.length) break;
+
+      for (const chunk of result.results) {
+        dataset[kind].push(...JSON.parse(chunk.payload));
+        nextChunkIndex = chunk.chunk_index + 1;
+      }
+      if (result.results.length < READ_CHUNKS_PER_QUERY) break;
+    }
   }
   return dataset;
 }
