@@ -1,5 +1,5 @@
-import { useState, useMemo, useRef } from 'react';
-import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight } from 'lucide-react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
 
 const decode = (buf) => {
@@ -82,6 +82,8 @@ const getField = (row, header) => {
 const percent = (reported, total) =>
   `${Number((total > 0 ? Math.min((reported / total) * 100, 100) : 0).toFixed(1))}%`;
 const isPendingOp = (op) => op.steps.every((step) => step.reported === 0);
+const isStepComplete = (step) => step.qtd > 0 && step.reported >= step.qtd;
+const isOpComplete = (op) => op.steps.length > 0 && op.steps.every(isStepComplete);
 
 function dateSortValue(value) {
   const date = String(value || '').trim();
@@ -137,7 +139,9 @@ function buildTree(ops, ordens) {
         desc: (order['Descrição GE'] || '').replace(/\s+/g, ' '),
         qtd,
         reported,
-        st: reported > 0 ? 'Concluída' : 'Pendente',
+        st: isStepComplete({ qtd, reported })
+          ? 'Concluída'
+          : reported > 0 ? 'Em andamento' : 'Pendente',
         emissao: dt(getField(order, 'DT Emissão') || getField(row, 'DT Emissão')),
         inicio: dt(order['Inicio Ordem']),
         fim: dt(order['Fim Ordem']),
@@ -173,6 +177,7 @@ function buildTree(ops, ordens) {
 
 const STYLE = {
   Concluída: { border: 'step-concluida', badge: 'badge-concluida', seg: 'segment-concluida' },
+  'Em andamento': { border: 'step-andamento', badge: 'badge-andamento', seg: 'segment-andamento' },
   Pendente: { border: 'step-pendente', badge: 'badge-pendente', seg: 'segment-pendente' },
   default: { border: 'step-default', badge: 'badge-default', seg: 'segment-default' },
 };
@@ -195,6 +200,25 @@ function StepNode({ s }) {
       <span className={`step-status ${c.badge}`}>{s.st}</span>
     </div>
   );
+}
+
+async function fetchApi(path, options) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...options?.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const error = new Error(body.error || `Falha na comunicação com o servidor (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json();
 }
 
 function OpCard({ op }) {
@@ -237,37 +261,138 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [filtro, setFiltro] = useState('');
   const [over, setOver] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [password, setPassword] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState('');
   const fileRef = useRef(null);
   const dirRef = useRef(null);
 
+  const loadSharedData = useCallback(async ({ showToast = false } = {}) => {
+    setLoading(true);
+    setLoadError('');
+
+    try {
+      const session = await fetchApi('/api/session');
+      setAuthenticated(true);
+      setAuthChecked(true);
+      setIsAdmin(session.isAdmin);
+      const dataset = await fetchApi('/api/data');
+      setOps(dataset.ops);
+      setOrdens(dataset.ordens);
+      setUpdatedAt(dataset.updatedAt || '');
+      if (showToast) toast.success('Dados atualizados');
+    } catch (error) {
+      setAuthChecked(true);
+      if (error.status === 401) {
+        setAuthenticated(false);
+        setIsAdmin(false);
+        setOps([]);
+        setOrdens([]);
+        setUpdatedAt('');
+      } else {
+        setLoadError(error.message);
+      }
+      if (showToast) toast.error(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (active) loadSharedData();
+    });
+    return () => {
+      active = false;
+    };
+  }, [loadSharedData]);
+
+  const handleLogin = async (event) => {
+    event.preventDefault();
+    setLoggingIn(true);
+    try {
+      await fetchApi('/api/login', {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      });
+      setPassword('');
+      await loadSharedData();
+    } catch (error) {
+      toast.error(error.message);
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetchApi('/api/logout', { method: 'POST' });
+      setAuthenticated(false);
+      setIsAdmin(false);
+      setOps([]);
+      setOrdens([]);
+      setUpdatedAt('');
+      setAuthChecked(true);
+    } catch (error) {
+      toast.error(error.message);
+    }
+  };
+
   const handleFiles = async (fileList) => {
+    if (!isAdmin || saving) return;
     const files = Array.from(fileList).filter((f) => /\.csv$/i.test(f.name));
     let allOps = [];
     let allOrdens = [];
     let ignorados = 0;
 
-    for (const file of files) {
-      const parsed = parseCSV(decode(await file.arrayBuffer()));
-      if (parsed.headers.includes('Ord Prod')) {
-        allOrdens = allOrdens.concat(parsed.data);
-      } else if (parsed.headers.includes('Numero da OP')) {
-        allOps = allOps.concat(parsed.data);
-      } else {
-        ignorados += 1;
-      }
-    }
-
-    if (allOps.length) setOps(allOps);
-    if (allOrdens.length) setOrdens(allOrdens);
-
-    if (!allOps.length && !allOrdens.length) {
-      toast.error('Nenhum CSV reconhecido');
+    if (!files.length) {
+      toast.error('Selecione pelo menos um arquivo CSV');
       return;
     }
 
-    toast.success(`${files.length - ignorados} arquivo(s) importado(s)`);
-    if (ignorados) {
-      toast.warning(`${ignorados} arquivo(s) ignorado(s): cabeçalho não reconhecido`);
+    setSaving(true);
+    try {
+      for (const file of files) {
+        const parsed = parseCSV(decode(await file.arrayBuffer()));
+        if (parsed.headers.some((header) => normalizeHeader(header) === 'ord prod')) {
+          allOrdens = allOrdens.concat(parsed.data);
+        } else if (parsed.headers.some((header) => normalizeHeader(header) === 'numero da op')) {
+          allOps = allOps.concat(parsed.data);
+        } else {
+          ignorados += 1;
+        }
+      }
+
+      if (!allOps.length && !allOrdens.length) {
+        toast.error('Nenhum CSV reconhecido');
+        return;
+      }
+
+      const nextOps = allOps.length ? allOps : ops;
+      const nextOrdens = allOrdens.length ? allOrdens : ordens;
+      const result = await fetchApi('/api/data', {
+        method: 'PUT',
+        body: JSON.stringify({ ops: nextOps, ordens: nextOrdens }),
+      });
+
+      setOps(nextOps);
+      setOrdens(nextOrdens);
+      setUpdatedAt(result.updatedAt);
+      toast.success(`${files.length - ignorados} arquivo(s) publicado(s) para consulta`);
+      if (ignorados) {
+        toast.warning(`${ignorados} arquivo(s) ignorado(s): cabeçalho não reconhecido`);
+      }
+    } catch (error) {
+      toast.error(`Não foi possível publicar os arquivos: ${error.message}`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -279,6 +404,10 @@ export default function App() {
     dates.sort((a, b) => dateSortValue(a) - dateSortValue(b));
     return [job, dates[0] || ''];
   })), [tree]);
+  const jobCompletion = useMemo(
+    () => new Map(tree.map(([job, list]) => [job, list.length > 0 && list.every(isOpComplete)])),
+    [tree],
+  );
 
   const stats = {
     jobs: tree.filter(([job]) => job).length,
@@ -300,15 +429,18 @@ export default function App() {
         .includes(q);
 
     return tree
-      .map(([job, list]) => [
-        job,
-        list.filter((op) => {
-          const matchesStatus = !filtro || (
-            filtro === 'Pendente' ? isPendingOp(op) : op.steps.some((step) => step.st === filtro)
-          );
-          return match(op) && matchesStatus;
-        }),
-      ])
+      .map(([job, list]) => {
+        const jobComplete = list.length > 0 && list.every(isOpComplete);
+        return [
+          job,
+          list.filter((op) => {
+            if (!match(op)) return false;
+            if (filtro === 'job-concluido') return jobComplete;
+            if (filtro === 'Pendente') return isPendingOp(op);
+            return !filtro || op.steps.some((step) => step.st === filtro);
+          }),
+        ];
+      })
       .filter(([, list]) => list.length > 0);
   }, [tree, q, filtro]);
 
@@ -318,11 +450,13 @@ export default function App() {
     <div
       className="app-shell"
       onDragOver={(event) => {
+        if (!authenticated || !isAdmin || saving) return;
         event.preventDefault();
         setOver(true);
       }}
       onDragLeave={() => setOver(false)}
       onDrop={(event) => {
+        if (!authenticated || !isAdmin || saving) return;
         event.preventDefault();
         setOver(false);
         handleFiles(event.dataTransfer.files);
@@ -356,30 +490,36 @@ export default function App() {
       </header>
 
       <main className="main-panel">
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".csv"
-          multiple
-          hidden
-          onChange={(event) => {
-            handleFiles(event.target.files);
-            event.target.value = '';
-          }}
-        />
-        <input
-          ref={dirRef}
-          type="file"
-          multiple
-          hidden
-          webkitdirectory=""
-          onChange={(event) => {
-            handleFiles(event.target.files);
-            event.target.value = '';
-          }}
-        />
+        {authenticated && isAdmin && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv"
+              multiple
+              hidden
+              disabled={saving}
+              onChange={(event) => {
+                handleFiles(event.target.files);
+                event.target.value = '';
+              }}
+            />
+            <input
+              ref={dirRef}
+              type="file"
+              multiple
+              hidden
+              webkitdirectory=""
+              disabled={saving}
+              onChange={(event) => {
+                handleFiles(event.target.files);
+                event.target.value = '';
+              }}
+            />
+          </>
+        )}
 
-        {hasData && (
+        {authenticated && hasData && (
           <div className="toolbar">
             <div className="search-wrap">
               <Search className="search-icon" />
@@ -393,7 +533,12 @@ export default function App() {
             </div>
 
             <div className="filter-group">
-              {[['', 'Todas'], ['Pendente', 'Pendentes'], ['Concluída', 'Concluídas']].map(([value, label]) => (
+              {[
+                ['', 'Todas'],
+                ['Pendente', 'Pendentes'],
+                ['Concluída', 'Etapas concluídas'],
+                ['job-concluido', 'Jobs finalizados'],
+              ].map(([value, label]) => (
                 <button
                   key={label}
                   type="button"
@@ -405,30 +550,107 @@ export default function App() {
               ))}
             </div>
 
-            <button type="button" className="primary-button upload-button" onClick={() => fileRef.current?.click()}>
-              <FileSpreadsheet className="button-icon" />
-              Trocar arquivos
+            {updatedAt && (
+              <span className="dataset-updated">
+                Dados atualizados em {new Date(updatedAt).toLocaleString('pt-BR')}
+              </span>
+            )}
+            <button
+              type="button"
+              className="secondary-button refresh-button"
+              onClick={() => loadSharedData({ showToast: true })}
+              disabled={loading}
+            >
+              <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
+              Atualizar
+            </button>
+            <button type="button" className="secondary-button logout-button" onClick={handleLogout}>
+              Sair
+            </button>
+            {isAdmin && (
+              <button
+                type="button"
+                className="primary-button upload-button"
+                onClick={() => fileRef.current?.click()}
+                disabled={saving}
+              >
+                <FileSpreadsheet className="button-icon" />
+                {saving ? 'Publicando...' : 'Atualizar arquivos'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {loading && !authChecked && (
+          <div className="empty-state"><p>Carregando Jobs publicados...</p></div>
+        )}
+
+        {!loading && loadError && !hasData && (
+          <div className="empty-state">
+            <p>{loadError}</p>
+            <button type="button" className="secondary-button" onClick={() => loadSharedData()}>
+              Tentar novamente
             </button>
           </div>
         )}
 
-        {!hasData && (
+        {!loading && authChecked && !authenticated && !loadError && (
+          <form className="login-panel" onSubmit={handleLogin}>
+            <h2>Consultar Jobs</h2>
+            <p>Digite a senha compartilhada para acessar os dados publicados.</p>
+            <label className="login-field">
+              <span>Senha de acesso</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            <button type="submit" className="primary-button" disabled={loggingIn || !password}>
+              {loggingIn ? 'Validando...' : 'Entrar'}
+            </button>
+          </form>
+        )}
+
+        {!loading && !loadError && authenticated && !hasData && isAdmin && (
           <div className={`dropzone ${over ? 'dropzone-over' : ''}`}>
-            <h2>Solte aqui os arquivos CSV exportados</h2>
-            <p>
-              Pode soltar o relatório de OPs e o de Ordens de Produção juntos; cada um é reconhecido pelo cabeçalho.
-            </p>
+            <h2>Publique os CSVs para consulta dos usuários</h2>
+            <p>Os arquivos publicados ficam disponíveis aos usuários autenticados neste site.</p>
             <div className="dropzone-actions">
-              <button type="button" className="primary-button" onClick={() => fileRef.current?.click()}>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => fileRef.current?.click()}
+                disabled={saving}
+              >
                 <FileSpreadsheet className="button-icon" />
-                Escolher arquivos
+                {saving ? 'Publicando...' : 'Escolher arquivos CSV'}
               </button>
 
-              <button type="button" className="secondary-button" onClick={() => dirRef.current?.click()}>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => dirRef.current?.click()}
+                disabled={saving}
+              >
                 <FolderOpen className="button-icon" />
                 Escolher pasta "Ordens de produção"
               </button>
             </div>
+          </div>
+        )}
+
+        {!loading && !loadError && authenticated && !hasData && !isAdmin && (
+          <div className="empty-state">
+            <p>Ainda não há Jobs publicados para consulta.</p>
+          </div>
+        )}
+
+        {authenticated && !hasData && (
+          <div className="empty-session-actions">
+            <button type="button" className="secondary-button" onClick={handleLogout}>Sair</button>
           </div>
         )}
 
@@ -446,6 +668,7 @@ export default function App() {
           {visible.map(([job, list]) => {
             const totalQty = list.reduce((sum, op) => sum + op.totalQty, 0);
             const reportedQty = list.reduce((sum, op) => sum + op.reportedQty, 0);
+            const jobComplete = jobCompletion.get(job);
 
             return (
               <details key={job || 'sem-job'} className="job-group">
@@ -456,6 +679,9 @@ export default function App() {
                   {jobEmissions.get(job) && (
                     <span className="job-emissao">Emissão {jobEmissions.get(job)}</span>
                   )}
+                  <span className={`job-status ${jobComplete ? 'job-status-complete' : ''}`}>
+                    {jobComplete ? 'Finalizado' : 'Em andamento'}
+                  </span>
                   <span className="job-percent">{percent(reportedQty, totalQty)} concluído</span>
                 </summary>
 

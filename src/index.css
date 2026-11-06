@@ -207,6 +207,71 @@ button {
   margin-left: auto;
 }
 
+.dataset-updated {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.refresh-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logout-button {
+  margin-left: 0;
+}
+
+.login-panel {
+  width: min(100%, 440px);
+  margin: 48px auto;
+  padding: 28px;
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.login-panel h2,
+.login-panel p {
+  margin: 0;
+}
+
+.login-panel p,
+.login-field span {
+  color: var(--muted);
+}
+
+.login-field {
+  width: 100%;
+  display: grid;
+  gap: 6px;
+}
+
+.login-field input {
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(2, 8, 23, 0.8);
+  color: var(--text);
+}
+
+.login-field input:focus {
+  outline: 2px solid rgba(96, 165, 250, 0.7);
+  outline-offset: 1px;
+}
+
+.refreshing {
+  animation: refresh-spin 1s linear infinite;
+}
+
+@keyframes refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
 .dropzone {
   border: 2px dashed rgba(148, 163, 184, 0.45);
   border-radius: 16px;
@@ -254,6 +319,12 @@ button {
   font-size: 1.1rem;
 }
 
+.empty-session-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
 .job-list {
   display: grid;
   gap: 14px;
@@ -299,6 +370,21 @@ button {
   font-size: 0.82rem;
   color: var(--text-soft);
   font-weight: 500;
+}
+
+.job-status {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.job-status-complete {
+  background: rgba(34, 197, 94, 0.12);
+  color: #86efac;
 }
 
 .job-percent {
@@ -385,6 +471,7 @@ button {
 }
 
 .segment-concluida { background: #22c55e; }
+.segment-andamento { background: #38bdf8; }
 .segment-pendente { background: #f59e0b; }
 .segment-default { background: rgba(148, 163, 184, 0.65); }
 
@@ -435,6 +522,7 @@ button {
 }
 
 .step-concluida { border-left-color: #22c55e; }
+.step-andamento { border-left-color: #38bdf8; }
 .step-pendente { border-left-color: #f59e0b; }
 .step-default { border-left-color: rgba(148, 163, 184, 0.7); }
 
@@ -478,6 +566,7 @@ button {
 }
 
 .badge-concluida { background: rgba(34, 197, 94, 0.12); color: #86efac; }
+.badge-andamento { background: rgba(56, 189, 248, 0.12); color: #7dd3fc; }
 .badge-pendente { background: rgba(245, 158, 11, 0.12); color: #fcd34d; }
 .badge-default { background: rgba(148, 163, 184, 0.12); color: #cbd5e1; }
 
@@ -487,6 +576,14 @@ button {
 }
 
 @media (max-width: 720px) {
+  .job-header {
+    flex-wrap: wrap;
+  }
+
+  .job-percent {
+    margin-left: auto;
+  }
+
   .topbar-inner {
     flex-direction: column;
     align-items: flex-start;
