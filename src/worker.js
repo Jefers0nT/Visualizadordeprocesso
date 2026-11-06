@@ -1,4 +1,5 @@
 const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
+const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
 const ROWS_PER_CHUNK = 100;
 const READ_CHUNKS_PER_QUERY = 12;
@@ -167,6 +168,50 @@ function validateRows(rows, header) {
   );
 }
 
+function validateUploadChunk(rows, kind, chunkIndex) {
+  if (
+    !Array.isArray(rows)
+    || rows.length === 0
+    || rows.length > ROWS_PER_CHUNK
+    || rows.some((row) => row === null || typeof row !== 'object' || Array.isArray(row))
+  ) return false;
+  if (chunkIndex !== 0) return true;
+  return validateRows(rows, kind === 'ops' ? 'Numero da OP' : 'Ord Prod');
+}
+
+async function* readDatasetChunks(db, snapshotId, updatedAt) {
+  const encoder = new TextEncoder();
+  yield encoder.encode('{"ops":[');
+
+  for (const kind of ['ops', 'ordens']) {
+    let nextChunkIndex = 0;
+    let hasRows = false;
+    while (true) {
+      const result = await db
+        .prepare(`
+          SELECT chunk_index, payload FROM dataset_chunks
+          WHERE snapshot_id = ? AND kind = ? AND chunk_index >= ?
+          ORDER BY chunk_index LIMIT ?
+        `)
+        .bind(snapshotId, kind, nextChunkIndex, READ_CHUNKS_PER_QUERY)
+        .all();
+      if (!result.results.length) break;
+
+      for (const chunk of result.results) {
+        const rows = chunk.payload.slice(1, -1);
+        if (rows) {
+          yield encoder.encode(`${hasRows ? ',' : ''}${rows}`);
+          hasRows = true;
+        }
+        nextChunkIndex = chunk.chunk_index + 1;
+      }
+      if (result.results.length < READ_CHUNKS_PER_QUERY) break;
+    }
+
+    yield encoder.encode(kind === 'ops' ? '],"ordens":[' : `],"updatedAt":${JSON.stringify(updatedAt)}}`);
+  }
+}
+
 async function readDataset(db) {
   const active = await db
     .prepare('SELECT snapshot_id FROM active_dataset WHERE singleton = 1')
@@ -179,28 +224,28 @@ async function readDataset(db) {
     .first();
   if (!snapshot) throw new Error('Active dataset snapshot is missing');
 
-  const dataset = { ops: [], ordens: [], updatedAt: snapshot.created_at };
-  for (const kind of ['ops', 'ordens']) {
-    let nextChunkIndex = 0;
-    while (true) {
-      const result = await db
-        .prepare(`
-          SELECT chunk_index, payload FROM dataset_chunks
-          WHERE snapshot_id = ? AND kind = ? AND chunk_index >= ?
-          ORDER BY chunk_index LIMIT ?
-        `)
-        .bind(active.snapshot_id, kind, nextChunkIndex, READ_CHUNKS_PER_QUERY)
-        .all();
-      if (!result.results.length) break;
-
-      for (const chunk of result.results) {
-        dataset[kind].push(...JSON.parse(chunk.payload));
-        nextChunkIndex = chunk.chunk_index + 1;
+  const iterator = readDatasetChunks(db, active.snapshot_id, snapshot.created_at);
+  const body = new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await iterator.next();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
       }
-      if (result.results.length < READ_CHUNKS_PER_QUERY) break;
-    }
-  }
-  return dataset;
+    },
+    cancel() {
+      return iterator.return();
+    },
+  });
+  return new Response(body, {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
 }
 
 function createChunks(snapshotId, kind, rows) {
@@ -214,6 +259,195 @@ function createChunks(snapshotId, kind, rows) {
     });
   }
   return chunks;
+}
+
+async function cleanupExpiredUploads(db) {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const active = await db
+    .prepare('SELECT snapshot_id FROM active_dataset WHERE singleton = 1')
+    .first();
+  const activeSnapshotId = active?.snapshot_id || '';
+  await db.batch([
+    db.prepare(`
+      DELETE FROM dataset_chunks WHERE snapshot_id IN (
+        SELECT snapshot_id FROM dataset_snapshots
+        WHERE created_at < ? AND snapshot_id <> ?
+      )
+    `).bind(cutoff, activeSnapshotId),
+    db.prepare(`
+      DELETE FROM dataset_snapshots WHERE created_at < ? AND snapshot_id <> ?
+    `).bind(cutoff, activeSnapshotId),
+  ]);
+}
+
+async function startDatasetUpload(db, expectedBytes) {
+  if (!Number.isInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > MAX_UPLOAD_BYTES) {
+    return { error: 'O envio excede o limite de 90 MiB.', status: 413 };
+  }
+
+  await cleanupExpiredUploads(db);
+  const snapshotId = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  await db
+    .prepare(`
+      INSERT INTO dataset_snapshots (
+        snapshot_id, created_at, upload_expected_bytes, upload_received_bytes
+      ) VALUES (?, ?, ?, 0)
+    `)
+    .bind(snapshotId, createdAt, expectedBytes)
+    .run();
+  return { uploadId: snapshotId, createdAt };
+}
+
+async function uploadDatasetChunk(db, uploadId, kind, chunkIndex, body, rows) {
+  if (
+    !uploadId
+    || !['ops', 'ordens'].includes(kind)
+    || !Number.isInteger(chunkIndex)
+    || chunkIndex < 0
+    || chunkIndex >= Math.ceil(MAX_ROWS_PER_KIND / ROWS_PER_CHUNK)
+    || !validateUploadChunk(rows, kind, chunkIndex)
+  ) {
+    return { error: 'Bloco de dados inválido.', status: 400 };
+  }
+
+  const snapshot = await db
+    .prepare(`
+      SELECT upload_expected_bytes, upload_received_bytes
+      FROM dataset_snapshots WHERE snapshot_id = ?
+    `)
+    .bind(uploadId)
+    .first();
+  if (!snapshot) return { error: 'A publicação temporária não existe mais.', status: 404 };
+
+  const active = await db
+    .prepare('SELECT snapshot_id FROM active_dataset WHERE singleton = 1')
+    .first();
+  if (active?.snapshot_id === uploadId) {
+    return { error: 'Este conjunto já foi publicado.', status: 409 };
+  }
+
+  const bodyBytes = new TextEncoder().encode(body).byteLength;
+  if (bodyBytes > MAX_UPLOAD_CHUNK_BYTES) {
+    return { error: 'Um bloco do envio excede 1 MiB.', status: 413 };
+  }
+  if (snapshot.upload_received_bytes + bodyBytes > snapshot.upload_expected_bytes) {
+    return { error: 'O envio excede o tamanho informado.', status: 400 };
+  }
+
+  try {
+    await db.batch([
+      db.prepare(`
+        INSERT INTO dataset_chunks (snapshot_id, kind, chunk_index, payload)
+        VALUES (?, ?, ?, ?)
+      `).bind(uploadId, kind, chunkIndex, body),
+      db.prepare(`
+        UPDATE dataset_snapshots
+        SET upload_received_bytes = upload_received_bytes + ?
+        WHERE snapshot_id = ?
+      `).bind(bodyBytes, uploadId),
+    ]);
+  } catch {
+    return { error: 'Não foi possível registrar um bloco do envio.', status: 409 };
+  }
+  return { ok: true };
+}
+
+async function getUploadChunkSummary(db, uploadId, kind) {
+  return db
+    .prepare(`
+      SELECT COUNT(*) AS chunk_count, MAX(chunk_index) AS max_chunk_index,
+        SUM(json_array_length(payload)) AS row_count,
+        SUM(length(CAST(payload AS BLOB))) AS byte_count
+      FROM dataset_chunks WHERE snapshot_id = ? AND kind = ?
+    `)
+    .bind(uploadId, kind)
+    .first();
+}
+
+async function activateDataset(db, snapshotId) {
+  await db
+    .prepare(`
+      INSERT INTO active_dataset (singleton, snapshot_id) VALUES (1, ?)
+      ON CONFLICT(singleton) DO UPDATE SET snapshot_id = excluded.snapshot_id
+    `)
+    .bind(snapshotId)
+    .run();
+
+  try {
+    await db.batch([
+      db.prepare('DELETE FROM dataset_chunks WHERE snapshot_id <> ?').bind(snapshotId),
+      db.prepare('DELETE FROM dataset_snapshots WHERE snapshot_id <> ?').bind(snapshotId),
+    ]);
+  } catch (error) {
+    console.error('Published dataset, but could not remove old snapshots', error);
+  }
+}
+
+async function completeDatasetUpload(db, payload) {
+  const { uploadId, chunkCounts, rowCounts } = payload || {};
+  const snapshot = await db
+    .prepare(`
+      SELECT created_at, upload_expected_bytes, upload_received_bytes
+      FROM dataset_snapshots WHERE snapshot_id = ?
+    `)
+    .bind(uploadId || '')
+    .first();
+  if (!snapshot) return { error: 'A publicação temporária não existe mais.', status: 404 };
+  if (snapshot.upload_received_bytes !== snapshot.upload_expected_bytes) {
+    return { error: 'O envio está incompleto.', status: 400 };
+  }
+
+  let totalRows = 0;
+  let totalBytes = 0;
+  for (const kind of ['ops', 'ordens']) {
+    const expectedChunks = chunkCounts?.[kind];
+    const expectedRows = rowCounts?.[kind];
+    if (
+      !Number.isInteger(expectedChunks)
+      || expectedChunks < 0
+      || expectedChunks > Math.ceil(MAX_ROWS_PER_KIND / ROWS_PER_CHUNK)
+      || !Number.isInteger(expectedRows)
+      || expectedRows < 0
+      || expectedRows > MAX_ROWS_PER_KIND
+      || expectedChunks !== Math.ceil(expectedRows / ROWS_PER_CHUNK)
+    ) {
+      return { error: 'O manifesto do envio é inválido.', status: 400 };
+    }
+
+    const actual = await getUploadChunkSummary(db, uploadId, kind);
+    if (
+      actual.chunk_count !== expectedChunks
+      || (expectedChunks > 0 && actual.max_chunk_index !== expectedChunks - 1)
+      || (actual.row_count || 0) !== expectedRows
+    ) {
+      return { error: 'Faltam blocos ou linhas no envio.', status: 400 };
+    }
+    totalRows += expectedRows;
+    totalBytes += actual.byte_count || 0;
+  }
+
+  if (totalRows === 0 || totalBytes !== snapshot.upload_expected_bytes) {
+    return { error: 'O envio não corresponde aos dados recebidos.', status: 400 };
+  }
+
+  await activateDataset(db, uploadId);
+  return { updatedAt: snapshot.created_at };
+}
+
+async function abortDatasetUpload(db, uploadId) {
+  if (!uploadId) return { error: 'Identificador de publicação inválido.', status: 400 };
+  const active = await db
+    .prepare('SELECT snapshot_id FROM active_dataset WHERE singleton = 1')
+    .first();
+  if (active?.snapshot_id === uploadId) {
+    return { error: 'O conjunto já foi publicado e não pode ser cancelado.', status: 409 };
+  }
+  await db.batch([
+    db.prepare('DELETE FROM dataset_chunks WHERE snapshot_id = ?').bind(uploadId),
+    db.prepare('DELETE FROM dataset_snapshots WHERE snapshot_id = ?').bind(uploadId),
+  ]);
+  return { ok: true };
 }
 
 async function publishDataset(db, rowsByKind) {
@@ -239,22 +473,7 @@ async function publishDataset(db, rowsByKind) {
       await db.batch(batch);
     }
 
-    await db
-      .prepare(`
-        INSERT INTO active_dataset (singleton, snapshot_id) VALUES (1, ?)
-        ON CONFLICT(singleton) DO UPDATE SET snapshot_id = excluded.snapshot_id
-      `)
-      .bind(snapshotId)
-      .run();
-
-    try {
-      await db.batch([
-        db.prepare('DELETE FROM dataset_chunks WHERE snapshot_id <> ?').bind(snapshotId),
-        db.prepare('DELETE FROM dataset_snapshots WHERE snapshot_id <> ?').bind(snapshotId),
-      ]);
-    } catch (error) {
-      console.error('Published dataset, but could not remove old snapshots', error);
-    }
+    await activateDataset(db, snapshotId);
 
     return createdAt;
   } catch (error) {
@@ -346,10 +565,101 @@ async function handleApi(request, env) {
 
   if (url.pathname === '/api/data' && request.method === 'GET') {
     try {
-      return json(await readDataset(env.DB));
+      return await readDataset(env.DB);
     } catch (error) {
       console.error('Could not read the shared dataset', error);
       return json({ error: 'Não foi possível carregar os Jobs publicados.' }, 500);
+    }
+  }
+
+  if (url.pathname === '/api/data' && request.method === 'POST') {
+    if (!isSameOrigin(request)) return json({ error: 'Origem da solicitação não permitida.' }, 403);
+    if (session.role !== 'admin') {
+      return json({ error: 'Somente administradores podem publicar arquivos.' }, 403);
+    }
+    if (Number(request.headers.get('Content-Length') || 0) > 1024) {
+      return json({ error: 'Solicitação de publicação inválida.' }, 413);
+    }
+
+    let payload;
+    try {
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > 1024) {
+        return json({ error: 'Solicitação de publicação inválida.' }, 413);
+      }
+      payload = JSON.parse(body);
+    } catch {
+      return json({ error: 'Solicitação de publicação inválida.' }, 400);
+    }
+
+    try {
+      if (payload?.action === 'start') {
+        const result = await startDatasetUpload(env.DB, payload.expectedBytes);
+        if (result.error) return json({ error: result.error }, result.status);
+        return json(result, 201);
+      }
+      if (payload?.action === 'complete') {
+        const result = await completeDatasetUpload(env.DB, payload);
+        if (result.error) return json({ error: result.error }, result.status);
+        return json({ updatedAt: result.updatedAt }, 201);
+      }
+      return json({ error: 'Ação de publicação desconhecida.' }, 400);
+    } catch (error) {
+      console.error('Could not process dataset upload', error);
+      return json({ error: 'Não foi possível processar a publicação.' }, 500);
+    }
+  }
+
+  if (url.pathname === '/api/data' && request.method === 'DELETE') {
+    if (!isSameOrigin(request)) return json({ error: 'Origem da solicitação não permitida.' }, 403);
+    if (session.role !== 'admin') {
+      return json({ error: 'Somente administradores podem cancelar publicações.' }, 403);
+    }
+    try {
+      const result = await abortDatasetUpload(env.DB, url.searchParams.get('uploadId'));
+      if (result.error) return json({ error: result.error }, result.status);
+      return json(result);
+    } catch (error) {
+      console.error('Could not cancel dataset upload', error);
+      return json({ error: 'Não foi possível cancelar a publicação.' }, 500);
+    }
+  }
+
+  if (url.pathname === '/api/data' && request.method === 'PUT' && url.searchParams.has('uploadId')) {
+    if (!isSameOrigin(request)) return json({ error: 'Origem da solicitação não permitida.' }, 403);
+    if (session.role !== 'admin') {
+      return json({ error: 'Somente administradores podem publicar arquivos.' }, 403);
+    }
+    if (Number(request.headers.get('Content-Length') || 0) > MAX_UPLOAD_CHUNK_BYTES) {
+      return json({ error: 'Um bloco do envio excede 1 MiB.' }, 413);
+    }
+
+    let body;
+    let rows;
+    try {
+      body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > MAX_UPLOAD_CHUNK_BYTES) {
+        return json({ error: 'Um bloco do envio excede 1 MiB.' }, 413);
+      }
+      rows = JSON.parse(body);
+    } catch {
+      return json({ error: 'O bloco enviado não é um JSON válido.' }, 400);
+    }
+
+    try {
+      const result = await uploadDatasetChunk(
+        env.DB,
+        url.searchParams.get('uploadId'),
+        url.searchParams.get('kind'),
+        Number(url.searchParams.get('index')),
+        body,
+        rows,
+      );
+      if (result.error) return json({ error: result.error }, result.status);
+      return json(result);
+    } catch (error) {
+      console.error('Could not store dataset upload chunk', error);
+      return json({ error: 'Não foi possível salvar um bloco do envio.' }, 500);
     }
   }
 
@@ -358,15 +668,15 @@ async function handleApi(request, env) {
     if (session.role !== 'admin') {
       return json({ error: 'Somente administradores podem publicar arquivos.' }, 403);
     }
-    if (Number(request.headers.get('Content-Length') || 0) > MAX_UPLOAD_BYTES) {
-      return json({ error: 'O envio excede o limite de 90 MiB.' }, 413);
+    if (Number(request.headers.get('Content-Length') || 0) > MAX_UPLOAD_CHUNK_BYTES) {
+      return json({ error: 'Envie os dados em blocos usando a versão atualizada do aplicativo.' }, 413);
     }
 
     let payload;
     try {
       const body = await request.text();
-      if (new TextEncoder().encode(body).byteLength > MAX_UPLOAD_BYTES) {
-        return json({ error: 'O envio excede o limite de 90 MiB.' }, 413);
+      if (new TextEncoder().encode(body).byteLength > MAX_UPLOAD_CHUNK_BYTES) {
+        return json({ error: 'Envie os dados em blocos usando a versão atualizada do aplicativo.' }, 413);
       }
       payload = JSON.parse(body);
     } catch {

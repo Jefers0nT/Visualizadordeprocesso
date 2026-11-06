@@ -77,6 +77,21 @@ const num = (value) => {
 
 const dt = (value) => (/[\d]/.test(value || '') ? value : '');
 const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
+const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
+const UPLOAD_ROWS_PER_CHUNK = 100;
+const UPLOAD_CONCURRENCY = 4;
+
+function createUploadChunks(rows) {
+  const chunks = [];
+  for (let offset = 0; offset < rows.length; offset += UPLOAD_ROWS_PER_CHUNK) {
+    const body = JSON.stringify(rows.slice(offset, offset + UPLOAD_ROWS_PER_CHUNK));
+    if (new TextEncoder().encode(body).byteLength > MAX_UPLOAD_CHUNK_BYTES) {
+      throw new Error('Um bloco de dados excede 1 MiB. Divida o relatório em arquivos menores.');
+    }
+    chunks.push(body);
+  }
+  return chunks;
+}
 const normalizeHeader = (value) =>
   String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 const getField = (row, header) => {
@@ -209,22 +224,44 @@ function StepNode({ s }) {
 }
 
 async function fetchApi(path, options) {
-  const response = await fetch(path, {
-    ...options,
-    headers: {
-      ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...options?.headers,
-    },
-  });
+  const method = options?.method || 'GET';
+  const maxAttempts = method === 'GET' ? 3 : 1;
 
-  if (!response.ok) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(path, {
+        ...options,
+        headers: {
+          ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+          ...options?.headers,
+        },
+      });
+    } catch {
+      if (attempt + 1 === maxAttempts) {
+        throw new Error('Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
+      continue;
+    }
+
+    if (response.ok) return response.json();
+
     const body = await response.json().catch(() => ({}));
+    const isTemporary = [408, 429, 500, 502, 503, 504].includes(response.status);
+    if (method === 'GET' && isTemporary && attempt + 1 < maxAttempts) {
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      const delay = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(retryAfter * 1000, 5000)
+        : 500 * (2 ** attempt);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      continue;
+    }
+
     const error = new Error(body.error || `Falha na comunicação com o servidor (${response.status})`);
     error.status = response.status;
     throw error;
   }
-
-  return response.json();
 }
 
 function OpCard({ op }) {
@@ -364,6 +401,8 @@ export default function App() {
     }
 
     setSaving(true);
+    let uploadId = '';
+    let finalized = false;
     try {
       for (const file of files) {
         const parsed = parseCSV(decode(await file.arrayBuffer()));
@@ -383,15 +422,44 @@ export default function App() {
 
       const nextOps = allOps.length ? allOps : ops;
       const nextOrdens = allOrdens.length ? allOrdens : ordens;
-      const payload = JSON.stringify({ ops: nextOps, ordens: nextOrdens });
-      if (new TextEncoder().encode(payload).byteLength > MAX_UPLOAD_BYTES) {
+      const chunks = {
+        ops: createUploadChunks(nextOps),
+        ordens: createUploadChunks(nextOrdens),
+      };
+      const expectedBytes = Object.values(chunks)
+        .flat()
+        .reduce((total, body) => total + new TextEncoder().encode(body).byteLength, 0);
+      if (expectedBytes > MAX_UPLOAD_BYTES) {
         toast.error('O envio excede o limite de 90 MiB. Divida os relatórios em arquivos menores.');
         return;
       }
-      const result = await fetchApi('/api/data', {
-        method: 'PUT',
-        body: payload,
+      const started = await fetchApi('/api/data', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'start', expectedBytes }),
       });
+      uploadId = started.uploadId;
+
+      for (const [kind, kindChunks] of Object.entries(chunks)) {
+        for (let offset = 0; offset < kindChunks.length; offset += UPLOAD_CONCURRENCY) {
+          const batch = kindChunks.slice(offset, offset + UPLOAD_CONCURRENCY);
+          await Promise.all(batch.map((body, batchIndex) => {
+            const index = offset + batchIndex;
+            const query = new URLSearchParams({ uploadId, kind, index: String(index) });
+            return fetchApi(`/api/data?${query}`, { method: 'PUT', body });
+          }));
+        }
+      }
+
+      const result = await fetchApi('/api/data', {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'complete',
+          uploadId,
+          chunkCounts: Object.fromEntries(Object.entries(chunks).map(([kind, items]) => [kind, items.length])),
+          rowCounts: { ops: nextOps.length, ordens: nextOrdens.length },
+        }),
+      });
+      finalized = true;
 
       setOps(nextOps);
       setOrdens(nextOrdens);
@@ -401,6 +469,9 @@ export default function App() {
         toast.warning(`${ignorados} arquivo(s) ignorado(s): cabeçalho não reconhecido`);
       }
     } catch (error) {
+      if (uploadId && !finalized) {
+        await fetchApi(`/api/data?uploadId=${encodeURIComponent(uploadId)}`, { method: 'DELETE' }).catch(() => {});
+      }
       toast.error(`Não foi possível publicar os arquivos: ${error.message}`);
     } finally {
       setSaving(false);
