@@ -1,4 +1,4 @@
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
 const ROWS_PER_CHUNK = 100;
 const STATEMENTS_PER_BATCH = 50;
@@ -348,14 +348,14 @@ async function handleApi(request, env) {
       return json({ error: 'Somente administradores podem publicar arquivos.' }, 403);
     }
     if (Number(request.headers.get('Content-Length') || 0) > MAX_UPLOAD_BYTES) {
-      return json({ error: 'Os arquivos excedem o limite de envio de 25 MB.' }, 413);
+      return json({ error: 'O envio excede o limite de 90 MiB.' }, 413);
     }
 
     let payload;
     try {
       const body = await request.text();
       if (new TextEncoder().encode(body).byteLength > MAX_UPLOAD_BYTES) {
-        return json({ error: 'Os arquivos excedem o limite de envio de 25 MB.' }, 413);
+        return json({ error: 'O envio excede o limite de 90 MiB.' }, 413);
       }
       payload = JSON.parse(body);
     } catch {

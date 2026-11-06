@@ -12,6 +12,10 @@ const decode = (buf) => {
 
 function parseCSV(text) {
   text = text.replace(/^\uFEFF/, '');
+  const firstLine = text.split(/\r?\n/, 1)[0] || '';
+  const delimiter = [';', ',', '\t'].reduce((selected, candidate) =>
+    firstLine.split(candidate).length > firstLine.split(selected).length ? candidate : selected,
+  ';');
   const rows = [];
   let row = [], field = '', inQuotes = false;
 
@@ -34,7 +38,7 @@ function parseCSV(text) {
 
     if (char === '"') {
       inQuotes = true;
-    } else if (char === ';') {
+    } else if (char === delimiter) {
       row.push(field);
       field = '';
     } else if (char === '\n') {
@@ -72,6 +76,7 @@ const num = (value) => {
 };
 
 const dt = (value) => (/[\d]/.test(value || '') ? value : '');
+const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
 const normalizeHeader = (value) =>
   String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 const getField = (row, header) => {
@@ -131,11 +136,12 @@ function buildTree(ops, ordens) {
       const order = ordMap.get(String(getField(row, 'OP')).trim()) || {};
       const qtd = num(order['Quantidade'] !== undefined && order['Quantidade'] !== '' ? order['Quantidade'] : row['Quantidade']);
       const reported = num(order['Quant Rep']);
+      const item = String(getField(row, 'Produto') || '');
 
       return {
-        ord: row['OP'],
-        item: row['Produto'],
-        sigla: order['Grup Estoque'] || row['Produto'].slice(5, 7),
+        ord: getField(row, 'OP'),
+        item,
+        sigla: order['Grup Estoque'] || item.slice(5, 7),
         desc: (order['Descrição GE'] || '').replace(/\s+/g, ' '),
         qtd,
         reported,
@@ -377,9 +383,14 @@ export default function App() {
 
       const nextOps = allOps.length ? allOps : ops;
       const nextOrdens = allOrdens.length ? allOrdens : ordens;
+      const payload = JSON.stringify({ ops: nextOps, ordens: nextOrdens });
+      if (new TextEncoder().encode(payload).byteLength > MAX_UPLOAD_BYTES) {
+        toast.error('O envio excede o limite de 90 MiB. Divida os relatórios em arquivos menores.');
+        return;
+      }
       const result = await fetchApi('/api/data', {
         method: 'PUT',
-        body: JSON.stringify({ ops: nextOps, ordens: nextOrdens }),
+        body: payload,
       });
 
       setOps(nextOps);

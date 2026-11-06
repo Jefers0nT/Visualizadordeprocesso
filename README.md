@@ -46,6 +46,8 @@ O acesso é compartilhado, sem contas individuais ou histórico por usuário. O 
 
    O nome configurado em `wrangler.jsonc` é `visualizadordeprocesso`, correspondente ao Worker do endereço `workers.dev` informado.
 
+   O app limita cada requisição de publicação a 90 MiB para permanecer abaixo do limite de payload do Worker.
+
 5. Compartilhe a senha de consulta com os usuários. Para publicar ou atualizar dados, entre com a senha de administrador e envie os CSVs pelo app. Os dados permanecem disponíveis no D1; a tela mostra a data da última publicação. Ao trocar somente um dos relatórios, o outro conjunto publicado é mantido. Um Job só aparece como **Finalizado** quando todas as suas etapas tiverem quantidade reportada igual ou superior à quantidade planejada.
 
 Para invalidar todas as sessões ativas, troque `SESSION_SECRET` com `npx wrangler secret put SESSION_SECRET`. Para acesso individual por usuário, será necessário migrar para um provedor de identidade.
