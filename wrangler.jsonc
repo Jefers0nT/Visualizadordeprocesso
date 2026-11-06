@@ -11,8 +11,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "visualizador-processo",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "consultadaop",
+      "database_id": "a9149764-41fd-47b4-8c0c-1cea9530cd91",
       "migrations_dir": "migrations"
     }
   ]
