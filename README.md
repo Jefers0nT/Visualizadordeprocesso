@@ -54,21 +54,23 @@ Para invalidar todas as sessões ativas, troque `SESSION_SECRET` com `npx wrangl
 
 ## Desenvolvimento local
 
-Crie um arquivo `.dev.vars` (ignorado pelo Git) com segredos somente de desenvolvimento:
-
-```ini
-VIEWER_PASSWORD="senha-local-de-consulta"
-ADMIN_PASSWORD="senha-local-de-administracao"
-SESSION_SECRET="um-segredo-local-aleatorio-com-pelo-menos-32-bytes"
-```
-
-Inicie o Worker e o app com:
+Inicie a aplicação local:
 
 ```sh
 npm run dev
 ```
 
-O Wrangler serve a aplicação localmente e usa o banco D1 local com as migrações. Validações:
+O Vite abre em `http://127.0.0.1:5173` e usa uma API local de desenvolvimento, sem acessar o Worker ou o D1 do Cloudflare. No ambiente local, a autenticação é desativada e o acesso é administrativo. Os dados publicados ficam em `.local/dataset.json`, pasta ignorada pelo Git.
+
+É possível importar os três relatórios em conjunto ou separadamente: OPs (`Numero da OP`), Ordens de Produção (`Ord Prod`, `Quant Rep`, `Quant Retrab` e `Quant Refug`) e apontamentos (`Ord Prod`, `Desc Máquina` e `Nome Usuário`). Os apontamentos são associados às etapas pela chave `Ord Prod`; máquina e usuário vêm do terceiro relatório, enquanto quantidade reportada, retrabalho e refugo vêm do relatório de Ordens. Faça uma cópia local dos relatórios se quiser manter os dados após limpar `.local`.
+
+Para testar o Worker com o D1 local do Wrangler, crie `.dev.vars` (também ignorado pelo Git) com credenciais somente de desenvolvimento e use:
+
+```sh
+npm run dev:worker
+```
+
+Validações:
 
 ```sh
 npm run lint
