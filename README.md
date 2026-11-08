@@ -1,4 +1,4 @@
-# Visualizador de Processo
+# Painel de OPs
 
 Aplicação React/Vite servida por um Cloudflare Worker. Os CSVs publicados são armazenados no Cloudflare D1 para que usuários autenticados consultem os mesmos Jobs em diferentes acessos e dispositivos.
 

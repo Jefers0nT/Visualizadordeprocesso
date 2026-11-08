@@ -792,7 +792,12 @@ export default function App() {
     pendentes: tree.filter(
       ([job, list]) => job && list.every(isPendingOp),
     ).length,
-    concluidas: allSteps.filter((s) => s.st === 'Concluída').length,
+    parciais: tree.filter(([job, list]) =>
+      job
+      && list.some((op) => op.steps.some((step) => step.reported > 0))
+      && !jobCompletion.get(job),
+    ).length,
+    concluidas: [...jobCompletion].filter(([job, complete]) => job && complete).length,
   };
 
   const q = search.trim().toLowerCase();
@@ -860,9 +865,9 @@ export default function App() {
           <div>
             <h1 className="title">
               <Network className="title-icon" />
-              Visualizador de Processo
+              Painel de OPs
             </h1>
-            <p className="subtitle">Job de Corte → OP → Etapas, na ordem em que o processo acontece</p>
+            <p className="subtitle">Programa → OP → Etapas. Na ordem em que o processo acontece</p>
           </div>
 
           <div className="stats-grid">
@@ -870,8 +875,9 @@ export default function App() {
               ['Jobs', stats.jobs],
               ['OPs', stats.ops],
               ['Etapas', stats.etapas],
-              ['Pendentes', stats.pendentes, 'accent-amber'],
-              ['Concluídas', stats.concluidas, 'accent-emerald'],
+              ['Jobs pendentes', stats.pendentes, 'accent-amber'],
+              ['Jobs parciais', stats.parciais, 'accent-blue'],
+              ['Jobs concluídos', stats.concluidas, 'accent-emerald'],
             ].map(([label, value, className]) => (
               <div key={label} className="stat-box">
                 <div className={`stat-value ${className || ''}`}>{value}</div>
