@@ -343,10 +343,11 @@ async function fetchApi(path, options) {
 }
 
 function OpCard({ op }) {
+  const [isOpen, setIsOpen] = useState(false);
   const done = op.steps.filter((s) => s.st === 'Concluída').length;
 
   return (
-    <details className="op-card">
+    <details className="op-card" onToggle={(event) => setIsOpen(event.currentTarget.open)}>
       <summary className="op-summary">
         <span className="op-title">
           <ChevronRight className="chevron" />
@@ -364,14 +365,50 @@ function OpCard({ op }) {
         </span>
       </summary>
 
-      <div className="step-flow">
-        {op.steps.map((s, index) => (
-          <div key={`${s.ord}-${index}`} className="flow-item-wrap">
-            {index > 0 && <span className="connector" />}
-            <StepNode s={s} />
-          </div>
-        ))}
-      </div>
+      {isOpen && (
+        <div className="step-flow">
+          {op.steps.map((s, index) => (
+            <div key={`${s.ord}-${index}`} className="flow-item-wrap">
+              {index > 0 && <span className="connector" />}
+              <StepNode s={s} />
+            </div>
+          ))}
+        </div>
+      )}
+    </details>
+  );
+}
+
+function JobGroup({ job, list, jobComplete, jobEmission }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const totalQty = list.reduce((sum, op) => sum + op.totalQty, 0);
+  const reportedQty = list.reduce((sum, op) => sum + op.reportedQty, 0);
+
+  return (
+    <details
+      className="job-group"
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+    >
+      <summary className="job-header">
+        <ChevronRight className="job-chevron" />
+        {job ? `Job ${job}` : 'Sem job de corte'}
+        <span className="job-count">{list.length} OP(s)</span>
+        {jobEmission && (
+          <span className="job-emissao">Emissão {jobEmission}</span>
+        )}
+        <span className={`job-status ${jobComplete ? 'job-status-complete' : ''}`}>
+          {jobComplete ? 'Finalizado' : 'Em andamento'}
+        </span>
+        <span className="job-percent">{percent(reportedQty, totalQty)} concluído</span>
+      </summary>
+
+      {isOpen && (
+        <div className="job-body">
+          {list.map((op) => (
+            <OpCard key={op.num} op={op} />
+          ))}
+        </div>
+      )}
     </details>
   );
 }
@@ -1354,34 +1391,15 @@ export default function App() {
 
         {activeView === 'production' && (
         <div className="job-list">
-          {visible.map(([job, list]) => {
-            const totalQty = list.reduce((sum, op) => sum + op.totalQty, 0);
-            const reportedQty = list.reduce((sum, op) => sum + op.reportedQty, 0);
-            const jobComplete = jobCompletion.get(job);
-
-            return (
-              <details key={job || 'sem-job'} className="job-group">
-                <summary className="job-header">
-                  <ChevronRight className="job-chevron" />
-                  {job ? `Job ${job}` : 'Sem job de corte'}
-                  <span className="job-count">{list.length} OP(s)</span>
-                  {jobEmissions.get(job) && (
-                    <span className="job-emissao">Emissão {jobEmissions.get(job)}</span>
-                  )}
-                  <span className={`job-status ${jobComplete ? 'job-status-complete' : ''}`}>
-                    {jobComplete ? 'Finalizado' : 'Em andamento'}
-                  </span>
-                  <span className="job-percent">{percent(reportedQty, totalQty)} concluído</span>
-                </summary>
-
-                <div className="job-body">
-                  {list.map((op) => (
-                    <OpCard key={op.num} op={op} />
-                  ))}
-                </div>
-              </details>
-            );
-          })}
+          {visible.map(([job, list]) => (
+            <JobGroup
+              key={job || 'sem-job'}
+              job={job}
+              list={list}
+              jobComplete={jobCompletion.get(job)}
+              jobEmission={jobEmissions.get(job)}
+            />
+          ))}
         </div>
         )}
       </main>

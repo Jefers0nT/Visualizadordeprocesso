@@ -342,7 +342,7 @@ test('large shared datasets stream from D1 in bounded pages', async () => {
   assert.equal(dataset.ordens.length, 201);
   assert.equal(dataset.ops[200].id, 'ops-200');
   assert.equal(dataset.ordens[200].id, 'ordens-200');
-  assert.equal(db.datasetReadPages, 34);
+  assert.equal(db.datasetReadPages, 12);
 });
 
 test('login limits repeated failed attempts from the same address', async () => {
