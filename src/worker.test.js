@@ -30,10 +30,13 @@ class FakeStatement {
 class FakeD1 {
   attempts = [];
   snapshots = new Map();
+  snapshotSizes = new Map();
   uploadState = new Map();
   chunks = [];
   activeSnapshotId = null;
   datasetReadPages = 0;
+  activeDatasetReadPages = 0;
+  maxConcurrentDatasetReadPages = 0;
 
   prepare(query) {
     return new FakeStatement(this, query);
@@ -59,11 +62,13 @@ class FakeD1 {
       for (const [id, createdAt] of this.snapshots) {
         if (id !== values[1] && createdAt < values[0]) {
           this.snapshots.delete(id);
+          this.snapshotSizes.delete(id);
           this.uploadState.delete(id);
         }
       }
     } else if (query.startsWith('INSERT INTO dataset_snapshots')) {
       this.snapshots.set(values[0], values[1]);
+      this.snapshotSizes.set(values[0], values[2] || 0);
       if (values.length > 2) {
         this.uploadState.set(values[0], { expectedBytes: values[2], receivedBytes: values[3] ?? 0 });
       }
@@ -86,10 +91,12 @@ class FakeD1 {
       this.chunks = this.chunks.filter((chunk) => chunk.snapshotId === values[0]);
     } else if (query.startsWith('DELETE FROM dataset_snapshots WHERE snapshot_id <>')) {
       this.snapshots = new Map([...this.snapshots].filter(([id]) => id === values[0]));
+      this.snapshotSizes = new Map([...this.snapshotSizes].filter(([id]) => id === values[0]));
     } else if (query.startsWith('DELETE FROM dataset_chunks WHERE snapshot_id =')) {
       this.chunks = this.chunks.filter((chunk) => chunk.snapshotId !== values[0]);
     } else if (query.startsWith('DELETE FROM dataset_snapshots WHERE snapshot_id =')) {
       this.snapshots.delete(values[0]);
+      this.snapshotSizes.delete(values[0]);
       this.uploadState.delete(values[0]);
     } else {
       throw new Error(`Unsupported fake D1 statement: ${query}`);
@@ -135,27 +142,57 @@ class FakeD1 {
     if (query.startsWith('SELECT snapshot_id FROM active_dataset')) {
       return this.activeSnapshotId ? { snapshot_id: this.activeSnapshotId } : null;
     }
-    if (query.startsWith('SELECT created_at FROM dataset_snapshots')) {
+    if (query.startsWith('SELECT created_at, upload_expected_bytes FROM dataset_snapshots')) {
       const createdAt = this.snapshots.get(values[0]);
-      return createdAt ? { created_at: createdAt } : null;
+      return createdAt ? {
+        created_at: createdAt,
+        upload_expected_bytes: this.snapshotSizes.get(values[0]) || 0,
+      } : null;
     }
     throw new Error(`Unsupported fake D1 query: ${query}`);
   }
 
   async all(query, values) {
+    if (query.startsWith('SELECT kind, COUNT(*) AS chunk_count')) {
+      const chunksByKind = ['ops', 'ordens'].map((kind) => {
+        const chunks = this.chunks.filter((chunk) =>
+          chunk.snapshotId === values[0] && chunk.kind === kind,
+        );
+        const expectedBytes = this.snapshotSizes.get(values[0]) || 0;
+        const actualBytes = chunks.reduce((sum, chunk) => sum + Buffer.byteLength(chunk.payload), 0);
+        return {
+          kind,
+          chunk_count: chunks.length,
+          payload_bytes: expectedBytes ? Math.ceil(expectedBytes / 2) : actualBytes,
+        };
+      });
+      return { results: chunksByKind.filter((row) => row.chunk_count > 0) };
+    }
+
     if (query.startsWith('SELECT chunk_index, payload FROM dataset_chunks')) {
       assert.match(query, /LIMIT \?/);
       this.datasetReadPages += 1;
-      const results = this.chunks
-        .filter((chunk) =>
-          chunk.snapshotId === values[0]
-          && chunk.kind === values[1]
-          && chunk.chunkIndex >= values[2],
-        )
-        .sort((a, b) => a.chunkIndex - b.chunkIndex)
-        .slice(0, values[3])
-        .map(({ chunkIndex, payload }) => ({ chunk_index: chunkIndex, payload }));
-      return { results };
+      this.activeDatasetReadPages += 1;
+      this.maxConcurrentDatasetReadPages = Math.max(
+        this.maxConcurrentDatasetReadPages,
+        this.activeDatasetReadPages,
+      );
+      try {
+        await Promise.resolve();
+        const results = this.chunks
+          .filter((chunk) =>
+            chunk.snapshotId === values[0]
+            && chunk.kind === values[1]
+            && (values.length === 3
+              || (chunk.chunkIndex >= values[2] && chunk.chunkIndex < values[3])),
+          )
+          .sort((a, b) => a.chunkIndex - b.chunkIndex)
+          .slice(0, values.length === 3 ? values[2] : values[4])
+          .map(({ chunkIndex, payload }) => ({ chunk_index: chunkIndex, payload }));
+        return { results };
+      } finally {
+        this.activeDatasetReadPages -= 1;
+      }
     }
     throw new Error(`Unsupported fake D1 query: ${query}`);
   }
@@ -287,11 +324,14 @@ test('admin publishes staged chunks only after every row is received', async () 
   assert.equal(uploadState.receivedBytes, uploadState.expectedBytes, JSON.stringify(uploadState));
   assert.equal(complete.status, 201, await complete.clone().text());
 
+  bindings.DB.snapshotSizes.set(uploadId, 80_008_540);
   const read = await request('/api/data', { db: bindings, cookie });
   const dataset = await read.json();
   assert.equal(dataset.ops.length, 250);
   assert.equal(dataset.ordens.length, 150);
   assert.equal(dataset.ops[249].Produto, 'ITEM-250');
+  assert.equal(bindings.DB.datasetReadPages, 2);
+  assert.equal(bindings.DB.maxConcurrentDatasetReadPages, 2);
 });
 
 test('incomplete staged upload leaves the active dataset unchanged', async () => {
@@ -322,6 +362,7 @@ test('large shared datasets stream from D1 in bounded pages', async () => {
   const snapshotId = 'large-snapshot';
   db.activeSnapshotId = snapshotId;
   db.snapshots.set(snapshotId, new Date().toISOString());
+  db.snapshotSizes.set(snapshotId, 90 * 1024 * 1024);
   for (const kind of ['ops', 'ordens']) {
     for (let chunkIndex = 0; chunkIndex < 201; chunkIndex += 1) {
       db.chunks.push({
@@ -342,7 +383,8 @@ test('large shared datasets stream from D1 in bounded pages', async () => {
   assert.equal(dataset.ordens.length, 201);
   assert.equal(dataset.ops[200].id, 'ops-200');
   assert.equal(dataset.ordens[200].id, 'ordens-200');
-  assert.equal(db.datasetReadPages, 12);
+  assert.equal(db.datasetReadPages, 10);
+  assert.equal(db.maxConcurrentDatasetReadPages, 3);
 });
 
 test('login limits repeated failed attempts from the same address', async () => {

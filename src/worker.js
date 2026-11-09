@@ -2,7 +2,10 @@ const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
 const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
 const ROWS_PER_CHUNK = 100;
-const READ_CHUNKS_PER_QUERY = 40;
+const READ_CHUNKS_PER_QUERY = 44;
+const READ_QUERY_CONCURRENCY = 3;
+const MAX_SINGLE_READ_BYTES = 40 * 1024 * 1024;
+const MAX_CHUNKS_PER_KIND = MAX_ROWS_PER_KIND / ROWS_PER_CHUNK;
 const STATEMENTS_PER_BATCH = 50;
 const SESSION_DURATION_SECONDS = 8 * 60 * 60;
 const SESSION_COOKIE = 'visualizador_session';
@@ -179,33 +182,107 @@ function validateUploadChunk(rows, kind, chunkIndex) {
   return validateRows(rows, kind === 'ops' ? 'Numero da OP' : 'Ord Prod');
 }
 
-async function* readDatasetChunks(db, snapshotId, updatedAt) {
+async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
   const encoder = new TextEncoder();
   yield encoder.encode('{"ops":[');
 
-  for (const kind of ['ops', 'ordens']) {
-    let nextChunkIndex = 0;
-    let hasRows = false;
-    while (true) {
+  const kinds = ['ops', 'ordens'];
+  let canReadAllChunks = expectedBytes > 0 && expectedBytes <= MAX_SINGLE_READ_BYTES;
+  let chunkCounts = new Map();
+  if (!canReadAllChunks) {
+    const summary = await db
+      .prepare(`
+        SELECT kind, COUNT(*) AS chunk_count, SUM(length(payload)) AS payload_bytes
+        FROM dataset_chunks WHERE snapshot_id = ? GROUP BY kind
+      `)
+      .bind(snapshotId)
+      .all();
+    const payloadSizes = new Map(summary.results.map((row) => [row.kind, row.payload_bytes]));
+    chunkCounts = new Map(summary.results.map((row) => [row.kind, row.chunk_count]));
+    canReadAllChunks = kinds.every(
+      (kind) => (payloadSizes.get(kind) || 0) <= MAX_SINGLE_READ_BYTES,
+    );
+  }
+
+  if (canReadAllChunks) {
+    const chunksByKind = await Promise.all(kinds.map(async (kind) => {
       const result = await db
         .prepare(`
           SELECT chunk_index, payload FROM dataset_chunks
-          WHERE snapshot_id = ? AND kind = ? AND chunk_index >= ?
+          WHERE snapshot_id = ? AND kind = ?
           ORDER BY chunk_index LIMIT ?
         `)
-        .bind(snapshotId, kind, nextChunkIndex, READ_CHUNKS_PER_QUERY)
+        .bind(snapshotId, kind, MAX_CHUNKS_PER_KIND)
         .all();
-      if (!result.results.length) break;
+      return [kind, result.results];
+    }));
 
-      for (const chunk of result.results) {
+    for (const [kind, chunks] of chunksByKind) {
+      let hasRows = false;
+      for (const chunk of chunks) {
         const rows = chunk.payload.slice(1, -1);
         if (rows) {
           yield encoder.encode(`${hasRows ? ',' : ''}${rows}`);
           hasRows = true;
         }
-        nextChunkIndex = chunk.chunk_index + 1;
       }
-      if (result.results.length < READ_CHUNKS_PER_QUERY) break;
+      yield encoder.encode(kind === 'ops'
+        ? '],"ordens":['
+        : `],"updatedAt":${JSON.stringify(updatedAt)}}`);
+    }
+    return;
+  }
+
+  for (const kind of kinds) {
+    let nextChunkIndex = 0;
+    let hasRows = false;
+    const chunkCount = chunkCounts.get(kind) || 0;
+    while (nextChunkIndex < chunkCount) {
+      const pagesToRead = Math.min(
+        READ_QUERY_CONCURRENCY,
+        Math.ceil((chunkCount - nextChunkIndex) / READ_CHUNKS_PER_QUERY),
+      );
+      const pages = await Promise.all(
+        Array.from({ length: pagesToRead }, (_, pageIndex) => {
+          const pageStart = nextChunkIndex + pageIndex * READ_CHUNKS_PER_QUERY;
+          return db
+            .prepare(`
+              SELECT chunk_index, payload FROM dataset_chunks
+              WHERE snapshot_id = ? AND kind = ? AND chunk_index >= ? AND chunk_index < ?
+              ORDER BY chunk_index LIMIT ?
+            `)
+            .bind(
+              snapshotId,
+              kind,
+              pageStart,
+              pageStart + READ_CHUNKS_PER_QUERY,
+              READ_CHUNKS_PER_QUERY,
+            )
+            .all();
+        }),
+      );
+
+      for (const page of pages) {
+        if (!page.results.length) {
+          nextChunkIndex = chunkCount;
+          break;
+        }
+
+        for (const chunk of page.results) {
+          const rows = chunk.payload.slice(1, -1);
+          if (rows) {
+            yield encoder.encode(`${hasRows ? ',' : ''}${rows}`);
+            hasRows = true;
+          }
+        }
+
+        if (page.results.length < READ_CHUNKS_PER_QUERY) {
+          nextChunkIndex = chunkCount;
+          break;
+        }
+      }
+
+      nextChunkIndex += READ_CHUNKS_PER_QUERY * pagesToRead;
     }
 
     yield encoder.encode(kind === 'ops' ? '],"ordens":[' : `],"updatedAt":${JSON.stringify(updatedAt)}}`);
@@ -219,12 +296,17 @@ async function readDataset(db) {
   if (!active) return { ops: [], ordens: [], updatedAt: null };
 
   const snapshot = await db
-    .prepare('SELECT created_at FROM dataset_snapshots WHERE snapshot_id = ?')
+    .prepare('SELECT created_at, upload_expected_bytes FROM dataset_snapshots WHERE snapshot_id = ?')
     .bind(active.snapshot_id)
     .first();
   if (!snapshot) throw new Error('Active dataset snapshot is missing');
 
-  const iterator = readDatasetChunks(db, active.snapshot_id, snapshot.created_at);
+  const iterator = readDatasetChunks(
+    db,
+    active.snapshot_id,
+    snapshot.created_at,
+    snapshot.upload_expected_bytes,
+  );
   const body = new ReadableStream({
     async pull(controller) {
       try {
