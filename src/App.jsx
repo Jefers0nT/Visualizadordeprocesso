@@ -592,14 +592,19 @@ export default function App() {
         }
       }
 
-      if (!allOps.length && !allOrdens.length && !allApontamentos.length) {
-        toast.error('Nenhum CSV reconhecido');
+      const missingReports = [
+        ['OPs', allOps],
+        ['Ordens de Produção', allOrdens],
+        ['Apontamentos', allApontamentos],
+      ].filter(([, rows]) => rows.length === 0).map(([name]) => name);
+      if (missingReports.length) {
+        toast.error(`Envie os três relatórios. Faltando: ${missingReports.join(', ')}.`);
         return;
       }
 
-      const nextOps = allOps.length ? allOps : ops;
-      const nextOrdens = allOrdens.length ? allOrdens : ordens;
-      const nextApontamentos = allApontamentos.length ? allApontamentos : apontamentos;
+      const nextOps = allOps;
+      const nextOrdens = allOrdens;
+      const nextApontamentos = allApontamentos;
       const chunks = {
         ops: createUploadChunks(nextOps),
         ordens: createUploadChunks(nextOrdens),

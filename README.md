@@ -48,7 +48,7 @@ O acesso é compartilhado, sem contas individuais ou histórico por usuário. O 
 
    O app limita cada requisição de publicação a 90 MiB para permanecer abaixo do limite de payload do Worker.
 
-5. Compartilhe a senha de consulta com os usuários. Para publicar ou atualizar dados, entre com a senha de administrador e envie os CSVs pelo app. Os dados permanecem disponíveis no D1; a tela mostra a data da última publicação. Ao trocar somente um dos relatórios, o outro conjunto publicado é mantido. Um Job só aparece como **Finalizado** quando todas as suas etapas tiverem quantidade reportada igual ou superior à quantidade planejada.
+5. Compartilhe a senha de consulta com os usuários. Para publicar ou atualizar dados, entre com a senha de administrador e envie juntos os três CSVs: OPs, Ordens de Produção e Apontamentos. Cada publicação substitui o conjunto anterior por completo; não é possível atualizar somente alguns relatórios. A tela mostra a data da última publicação. Um Job só aparece como **Finalizado** quando todas as suas etapas tiverem quantidade reportada igual ou superior à quantidade planejada.
 
 Para invalidar todas as sessões ativas, troque `SESSION_SECRET` com `npx wrangler secret put SESSION_SECRET`. Para acesso individual por usuário, será necessário migrar para um provedor de identidade.
 
@@ -62,7 +62,7 @@ npm run dev
 
 O Vite abre em `http://127.0.0.1:5173` e usa uma API local de desenvolvimento, sem acessar o Worker ou o D1 do Cloudflare. No ambiente local, a autenticação é desativada e o acesso é administrativo. Os dados publicados ficam em `.local/dataset.json`, pasta ignorada pelo Git.
 
-É possível importar os três relatórios em conjunto ou separadamente: OPs (`Numero da OP`), Ordens de Produção (`Ord Prod`, `Quant Rep`, `Quant Retrab` e `Quant Refug`) e apontamentos (`Ord Prod`, `Desc Máquina` e `Nome Usuário`). Os apontamentos são associados às etapas pela chave `Ord Prod`; máquina e usuário vêm do terceiro relatório, enquanto quantidade reportada, retrabalho e refugo vêm do relatório de Ordens. Faça uma cópia local dos relatórios se quiser manter os dados após limpar `.local`.
+Importe sempre os três relatórios juntos: OPs (`Numero da OP`), Ordens de Produção (`Ord Prod`, `Quant Rep`, `Quant Retrab` e `Quant Refug`) e apontamentos (`Ord Prod`, `Desc Máquina` e `Nome Usuário`). Cada importação substitui o conjunto local anterior. Os apontamentos são associados às etapas pela chave `Ord Prod`; máquina e usuário vêm do terceiro relatório, enquanto quantidade reportada, retrabalho e refugo vêm do relatório de Ordens. Faça uma cópia local dos relatórios se quiser manter os dados após limpar `.local`.
 
 Para testar o Worker com o D1 local do Wrangler, crie `.dev.vars` (também ignorado pelo Git) com credenciais somente de desenvolvimento e use:
 

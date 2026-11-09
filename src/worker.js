@@ -171,6 +171,15 @@ function validateRows(rows, header) {
   );
 }
 
+function validateProductionReportRows(rows) {
+  return validateRows(rows, 'Ord Prod')
+    && ['Desc Máquina', 'Nome Usuário'].every((header) =>
+      rows.some((row) =>
+        Object.keys(row).some((key) => normalizeHeader(key) === normalizeHeader(header)),
+      ),
+    );
+}
+
 function validateUploadChunk(rows, kind, chunkIndex) {
   if (
     !Array.isArray(rows)
@@ -179,14 +188,16 @@ function validateUploadChunk(rows, kind, chunkIndex) {
     || rows.some((row) => row === null || typeof row !== 'object' || Array.isArray(row))
   ) return false;
   if (chunkIndex !== 0) return true;
-  return validateRows(rows, kind === 'ops' ? 'Numero da OP' : 'Ord Prod');
+  if (kind === 'ops') return validateRows(rows, 'Numero da OP');
+  if (kind === 'ordens') return validateRows(rows, 'Ord Prod');
+  return validateProductionReportRows(rows);
 }
 
 async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
   const encoder = new TextEncoder();
   yield encoder.encode('{"ops":[');
 
-  const kinds = ['ops', 'ordens'];
+  const kinds = ['ops', 'ordens', 'apontamentos'];
   let canReadAllChunks = expectedBytes > 0 && expectedBytes <= MAX_SINGLE_READ_BYTES;
   let chunkCounts = new Map();
   if (!canReadAllChunks) {
@@ -217,7 +228,7 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
       return [kind, result.results];
     }));
 
-    for (const [kind, chunks] of chunksByKind) {
+    for (const [index, [, chunks]] of chunksByKind.entries()) {
       let hasRows = false;
       for (const chunk of chunks) {
         const rows = chunk.payload.slice(1, -1);
@@ -226,9 +237,9 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
           hasRows = true;
         }
       }
-      yield encoder.encode(kind === 'ops'
-        ? '],"ordens":['
-        : `],"updatedAt":${JSON.stringify(updatedAt)}}`);
+      yield encoder.encode(index === kinds.length - 1
+        ? `],"updatedAt":${JSON.stringify(updatedAt)}}`
+        : `],"${kinds[index + 1]}":[`);
     }
     return;
   }
@@ -285,7 +296,9 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
       nextChunkIndex += READ_CHUNKS_PER_QUERY * pagesToRead;
     }
 
-    yield encoder.encode(kind === 'ops' ? '],"ordens":[' : `],"updatedAt":${JSON.stringify(updatedAt)}}`);
+    yield encoder.encode(kind === 'apontamentos'
+      ? `],"updatedAt":${JSON.stringify(updatedAt)}}`
+      : `],"${kinds[kinds.indexOf(kind) + 1]}":[`);
   }
 }
 
@@ -293,7 +306,7 @@ async function readDataset(db) {
   const active = await db
     .prepare('SELECT snapshot_id FROM active_dataset WHERE singleton = 1')
     .first();
-  if (!active) return { ops: [], ordens: [], updatedAt: null };
+  if (!active) return { ops: [], ordens: [], apontamentos: [], updatedAt: null };
 
   const snapshot = await db
     .prepare('SELECT created_at, upload_expected_bytes FROM dataset_snapshots WHERE snapshot_id = ?')
@@ -384,7 +397,7 @@ async function startDatasetUpload(db, expectedBytes) {
 async function uploadDatasetChunk(db, uploadId, kind, chunkIndex, body, rows) {
   if (
     !uploadId
-    || !['ops', 'ordens'].includes(kind)
+    || !['ops', 'ordens', 'apontamentos'].includes(kind)
     || !Number.isInteger(chunkIndex)
     || chunkIndex < 0
     || chunkIndex >= Math.ceil(MAX_ROWS_PER_KIND / ROWS_PER_CHUNK)
@@ -429,7 +442,8 @@ async function uploadDatasetChunk(db, uploadId, kind, chunkIndex, body, rows) {
         WHERE snapshot_id = ?
       `).bind(bodyBytes, uploadId),
     ]);
-  } catch {
+  } catch (error) {
+    console.error('Could not register dataset upload chunk', error);
     return { error: 'Não foi possível registrar um bloco do envio.', status: 409 };
   }
   return { ok: true };
@@ -482,7 +496,7 @@ async function completeDatasetUpload(db, payload) {
 
   let totalRows = 0;
   let totalBytes = 0;
-  for (const kind of ['ops', 'ordens']) {
+  for (const kind of ['ops', 'ordens', 'apontamentos']) {
     const expectedChunks = chunkCounts?.[kind];
     const expectedRows = rowCounts?.[kind];
     if (
@@ -490,7 +504,7 @@ async function completeDatasetUpload(db, payload) {
       || expectedChunks < 0
       || expectedChunks > Math.ceil(MAX_ROWS_PER_KIND / ROWS_PER_CHUNK)
       || !Number.isInteger(expectedRows)
-      || expectedRows < 0
+      || expectedRows < 1
       || expectedRows > MAX_ROWS_PER_KIND
       || expectedChunks !== Math.ceil(expectedRows / ROWS_PER_CHUNK)
     ) {
@@ -544,6 +558,7 @@ async function publishDataset(db, rowsByKind) {
     const chunks = [
       ...createChunks(snapshotId, 'ops', rowsByKind.ops),
       ...createChunks(snapshotId, 'ordens', rowsByKind.ordens),
+      ...createChunks(snapshotId, 'apontamentos', rowsByKind.apontamentos || []),
     ];
 
     for (let offset = 0; offset < chunks.length; offset += STATEMENTS_PER_BATCH) {
@@ -769,9 +784,14 @@ async function handleApi(request, env) {
       !payload
       || !validateRows(payload.ops, 'Numero da OP')
       || !validateRows(payload.ordens, 'Ord Prod')
-      || payload.ops.length === 0 && payload.ordens.length === 0
+      || !validateProductionReportRows(payload.apontamentos)
+      || (
+        payload.ops.length === 0
+        || payload.ordens.length === 0
+        || payload.apontamentos.length === 0
+      )
     ) {
-      return json({ error: 'Os arquivos não contêm os cabeçalhos esperados de OPs ou Ordens de Produção.' }, 400);
+      return json({ error: 'Os arquivos não contêm os cabeçalhos esperados de OPs, Ordens de Produção ou Apontamentos.' }, 400);
     }
 
     try {

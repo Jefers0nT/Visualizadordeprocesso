@@ -154,7 +154,7 @@ class FakeD1 {
 
   async all(query, values) {
     if (query.startsWith('SELECT kind, COUNT(*) AS chunk_count')) {
-      const chunksByKind = ['ops', 'ordens'].map((kind) => {
+      const chunksByKind = ['ops', 'ordens', 'apontamentos'].map((kind) => {
         const chunks = this.chunks.filter((chunk) =>
           chunk.snapshotId === values[0] && chunk.kind === kind,
         );
@@ -224,8 +224,11 @@ async function login(db, password, ip) {
   return { response, cookie };
 }
 
-async function stagedUpload(db, cookie, ops, ordens, { omitChunk } = {}) {
-  const rowsByKind = { ops, ordens };
+async function stagedUpload(db, cookie, ops, ordens, {
+  omitChunk,
+  apontamentos = [{ 'Ord Prod': '1', 'Desc Máquina': 'Laser', 'Nome Usuário': 'Operador' }],
+} = {}) {
+  const rowsByKind = { ops, ordens, apontamentos };
   const chunksByKind = Object.fromEntries(Object.entries(rowsByKind).map(([kind, rows]) => [
     kind,
     Array.from({ length: Math.ceil(rows.length / 100) }, (_, index) => rows.slice(index * 100, (index + 1) * 100)),
@@ -292,34 +295,57 @@ test('admin can publish a dataset that persists for later reads', async () => {
   assert.equal(response.status, 200);
 
   const ops = [{ 'Numero da OP': '123', Produto: 'ITEM-01' }];
+  const apontamentos = [{
+    'Ord Prod': '123',
+    'Desc Máquina': 'Laser',
+    'Nome Usuário': 'Operador',
+  }];
   const publish = await request('/api/data', {
     db: bindings,
     method: 'PUT',
     cookie,
-    body: { ops, ordens: [] },
+    body: { ops, ordens: [{ 'Ord Prod': '123' }], apontamentos },
   });
   assert.equal(publish.status, 201);
 
   const read = await request('/api/data', { db: bindings, cookie });
   const dataset = await read.json();
   assert.deepEqual(dataset.ops, ops);
-  assert.deepEqual(dataset.ordens, []);
+  assert.deepEqual(dataset.ordens, [{ 'Ord Prod': '123' }]);
+  assert.deepEqual(dataset.apontamentos, apontamentos);
   assert.ok(dataset.updatedAt);
 });
 
 test('admin publishes staged chunks only after every row is received', async () => {
   const bindings = env();
   const { cookie } = await login(bindings, bindings.ADMIN_PASSWORD);
+  const initial = await request('/api/data', {
+    db: bindings,
+    method: 'PUT',
+    cookie,
+    body: {
+      ops: [{ 'Numero da OP': 'old' }],
+      ordens: [{ 'Ord Prod': 'old' }],
+      apontamentos: [{ 'Ord Prod': 'old', 'Desc Máquina': 'Laser', 'Nome Usuário': 'Operador antigo' }],
+    },
+  });
+  assert.equal(initial.status, 201);
+
   const ops = Array.from({ length: 250 }, (_, index) => ({
     'Numero da OP': String(index + 1),
     Produto: `ITEM-${index + 1}`,
   }));
+  const apontamentos = [{
+    'Ord Prod': '1',
+    'Desc Máquina': 'Laser',
+    'Nome Usuário': 'Operador',
+  }];
   const ordens = Array.from({ length: 150 }, (_, index) => ({
     'Ord Prod': String(index + 1),
     Produto: `ORDEM-${index + 1}`,
   }));
 
-  const { complete, uploadId } = await stagedUpload(bindings, cookie, ops, ordens);
+  const { complete, uploadId } = await stagedUpload(bindings, cookie, ops, ordens, { apontamentos });
   const uploadState = bindings.DB.uploadState.get(uploadId);
   assert.equal(uploadState.receivedBytes, uploadState.expectedBytes, JSON.stringify(uploadState));
   assert.equal(complete.status, 201, await complete.clone().text());
@@ -329,9 +355,11 @@ test('admin publishes staged chunks only after every row is received', async () 
   const dataset = await read.json();
   assert.equal(dataset.ops.length, 250);
   assert.equal(dataset.ordens.length, 150);
+  assert.deepEqual(dataset.apontamentos, apontamentos);
+  assert.equal(dataset.ops.some((op) => op['Numero da OP'] === 'old'), false);
   assert.equal(dataset.ops[249].Produto, 'ITEM-250');
-  assert.equal(bindings.DB.datasetReadPages, 2);
-  assert.equal(bindings.DB.maxConcurrentDatasetReadPages, 2);
+  assert.equal(bindings.DB.datasetReadPages, 3);
+  assert.equal(bindings.DB.maxConcurrentDatasetReadPages, 3);
 });
 
 test('incomplete staged upload leaves the active dataset unchanged', async () => {
@@ -341,7 +369,11 @@ test('incomplete staged upload leaves the active dataset unchanged', async () =>
     db: bindings,
     method: 'PUT',
     cookie,
-    body: { ops: [{ 'Numero da OP': 'original' }], ordens: [] },
+    body: {
+      ops: [{ 'Numero da OP': 'original' }],
+      ordens: [{ 'Ord Prod': 'original' }],
+      apontamentos: [{ 'Ord Prod': 'original', 'Desc Máquina': 'Laser', 'Nome Usuário': 'Operador' }],
+    },
   });
   assert.equal(initial.status, 201);
   const activeSnapshotId = bindings.DB.activeSnapshotId;
@@ -350,6 +382,35 @@ test('incomplete staged upload leaves the active dataset unchanged', async () =>
   const { complete, uploadId } = await stagedUpload(bindings, cookie, ops, [], {
     omitChunk: { kind: 'ops', index: 1 },
   });
+  assert.equal(complete.status, 400);
+  assert.equal(bindings.DB.activeSnapshotId, activeSnapshotId);
+
+  await request(`/api/data?uploadId=${uploadId}`, { db: bindings, method: 'DELETE', cookie });
+});
+
+test('staged publication requires every report before replacing the active dataset', async () => {
+  const bindings = env();
+  const { cookie } = await login(bindings, bindings.ADMIN_PASSWORD);
+  const initial = await request('/api/data', {
+    db: bindings,
+    method: 'PUT',
+    cookie,
+    body: {
+      ops: [{ 'Numero da OP': 'original' }],
+      ordens: [{ 'Ord Prod': 'original' }],
+      apontamentos: [{ 'Ord Prod': 'original', 'Desc Máquina': 'Laser', 'Nome Usuário': 'Operador' }],
+    },
+  });
+  assert.equal(initial.status, 201);
+  const activeSnapshotId = bindings.DB.activeSnapshotId;
+
+  const { complete, uploadId } = await stagedUpload(
+    bindings,
+    cookie,
+    [{ 'Numero da OP': 'replacement' }],
+    [{ 'Ord Prod': 'replacement' }],
+    { apontamentos: [] },
+  );
   assert.equal(complete.status, 400);
   assert.equal(bindings.DB.activeSnapshotId, activeSnapshotId);
 

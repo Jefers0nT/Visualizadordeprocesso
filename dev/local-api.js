@@ -138,8 +138,10 @@ function localApi() {
               if (!validRows(rowsByKind.ops, 'numero da op')
                 || !validRows(rowsByKind.ordens, 'ord prod')
                 || !validProductionReports(rowsByKind.apontamentos)
-                || (!rowsByKind.ops.length && !rowsByKind.ordens.length && !rowsByKind.apontamentos.length)) {
-                return sendJson(response, { error: 'Os CSVs não contêm os cabeçalhos esperados.' }, 400);
+                || !rowsByKind.ops.length
+                || !rowsByKind.ordens.length
+                || !rowsByKind.apontamentos.length) {
+                return sendJson(response, { error: 'Envie os três relatórios: OPs, Ordens de Produção e Apontamentos.' }, 400);
               }
               dataset = { ...rowsByKind, updatedAt: new Date().toISOString() };
               await persist();
