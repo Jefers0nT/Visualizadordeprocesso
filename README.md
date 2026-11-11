@@ -46,7 +46,7 @@ O acesso é compartilhado, sem contas individuais ou histórico por usuário. O 
 
    O nome configurado em `wrangler.jsonc` é `visualizadordeprocesso`, correspondente ao Worker do endereço `workers.dev` informado.
 
-   O app limita cada requisição de publicação a 90 MiB para permanecer abaixo do limite de payload do Worker.
+   Os relatórios são enviados em blocos de até 1 MiB, sem um limite fixo de 90 MiB para o conjunto. Permanecem os limites de 100.000 linhas por tipo de relatório e os limites de armazenamento e recursos do Cloudflare e do navegador.
 
 5. Compartilhe a senha de consulta com os usuários. Para publicar ou atualizar dados, entre com a senha de administrador e envie juntos os três CSVs: OPs, Ordens de Produção e Apontamentos. Cada publicação substitui o conjunto anterior por completo; não é possível atualizar somente alguns relatórios. A tela mostra a data da última publicação. Um Job só aparece como **Finalizado** quando todas as suas etapas tiverem quantidade reportada igual ou superior à quantidade planejada.
 

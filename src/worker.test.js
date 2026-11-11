@@ -37,6 +37,7 @@ class FakeD1 {
   datasetReadPages = 0;
   activeDatasetReadPages = 0;
   maxConcurrentDatasetReadPages = 0;
+  fakePayloadBytesPerKind = null;
 
   prepare(query) {
     return new FakeStatement(this, query);
@@ -158,12 +159,11 @@ class FakeD1 {
         const chunks = this.chunks.filter((chunk) =>
           chunk.snapshotId === values[0] && chunk.kind === kind,
         );
-        const expectedBytes = this.snapshotSizes.get(values[0]) || 0;
         const actualBytes = chunks.reduce((sum, chunk) => sum + Buffer.byteLength(chunk.payload), 0);
         return {
           kind,
           chunk_count: chunks.length,
-          payload_bytes: expectedBytes ? Math.ceil(expectedBytes / 2) : actualBytes,
+          payload_bytes: this.fakePayloadBytesPerKind ?? actualBytes,
         };
       });
       return { results: chunksByKind.filter((row) => row.chunk_count > 0) };
@@ -388,6 +388,50 @@ test('incomplete staged upload leaves the active dataset unchanged', async () =>
   await request(`/api/data?uploadId=${uploadId}`, { db: bindings, method: 'DELETE', cookie });
 });
 
+test('staged publication accepts and streams more than 90 MiB', async () => {
+  const bindings = env();
+  const { cookie } = await login(bindings, bindings.ADMIN_PASSWORD);
+  const ops = Array.from({ length: 10_000 }, (_, index) => ({
+    'Numero da OP': String(index),
+    Produto: 'x'.repeat(9_500),
+  }));
+  const { complete, uploadId } = await stagedUpload(
+    bindings,
+    cookie,
+    ops,
+    [{ 'Ord Prod': '1' }],
+  );
+  assert.equal(complete.status, 201, await complete.clone().text());
+  assert.ok(bindings.DB.uploadState.get(uploadId).expectedBytes > 90 * 1024 * 1024);
+
+  const read = await request('/api/data', { db: bindings, cookie });
+  assert.equal(read.status, 200);
+  let bytes = 0;
+  let rowCount = 0;
+  const decoder = new TextDecoder();
+  for await (const chunk of read.body) {
+    bytes += chunk.byteLength;
+    rowCount += (decoder.decode(chunk).match(/"Numero da OP":/g) || []).length;
+  }
+  assert.ok(bytes > 90 * 1024 * 1024);
+  assert.equal(rowCount, ops.length);
+  assert.ok(bindings.DB.datasetReadPages > 3);
+});
+
+test('staged publication rejects invalid expected sizes', async () => {
+  const bindings = env();
+  const { cookie } = await login(bindings, bindings.ADMIN_PASSWORD);
+  for (const expectedBytes of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '100']) {
+    const response = await request('/api/data', {
+      db: bindings,
+      method: 'POST',
+      cookie,
+      body: { action: 'start', expectedBytes },
+    });
+    assert.equal(response.status, 400);
+  }
+});
+
 test('staged publication requires every report before replacing the active dataset', async () => {
   const bindings = env();
   const { cookie } = await login(bindings, bindings.ADMIN_PASSWORD);
@@ -424,6 +468,7 @@ test('large shared datasets stream from D1 in bounded pages', async () => {
   db.activeSnapshotId = snapshotId;
   db.snapshots.set(snapshotId, new Date().toISOString());
   db.snapshotSizes.set(snapshotId, 90 * 1024 * 1024);
+  db.fakePayloadBytesPerKind = 50 * 1024 * 1024;
   for (const kind of ['ops', 'ordens']) {
     for (let chunkIndex = 0; chunkIndex < 201; chunkIndex += 1) {
       db.chunks.push({
@@ -444,7 +489,7 @@ test('large shared datasets stream from D1 in bounded pages', async () => {
   assert.equal(dataset.ordens.length, 201);
   assert.equal(dataset.ops[200].id, 'ops-200');
   assert.equal(dataset.ordens[200].id, 'ordens-200');
-  assert.equal(db.datasetReadPages, 10);
+  assert.equal(db.datasetReadPages, 42);
   assert.equal(db.maxConcurrentDatasetReadPages, 3);
 });
 

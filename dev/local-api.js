@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
 const MAX_CHUNK_BYTES = 1024 * 1024;
 const ROWS_PER_CHUNK = 100;
 const DATA_FILE = path.resolve('.local', 'dataset.json');
@@ -90,10 +89,8 @@ function localApi() {
           if (url.pathname === '/api/data' && request.method === 'POST') {
             const payload = JSON.parse(await readBody(request, 1024));
             if (payload.action === 'start') {
-              if (!Number.isInteger(payload.expectedBytes)
-                || payload.expectedBytes < 1
-                || payload.expectedBytes > MAX_UPLOAD_BYTES) {
-                return sendJson(response, { error: 'O envio excede o limite de 90 MiB.' }, 413);
+              if (!Number.isSafeInteger(payload.expectedBytes) || payload.expectedBytes < 1) {
+                return sendJson(response, { error: 'O tamanho informado para o envio é inválido.' }, 400);
               }
               const uploadId = randomUUID();
               uploads.set(uploadId, {

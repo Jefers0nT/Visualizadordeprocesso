@@ -76,7 +76,6 @@ const num = (value) => {
 };
 
 const dt = (value) => (/[\d]/.test(value || '') ? value : '');
-const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
 const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const UPLOAD_ROWS_PER_CHUNK = 100;
 const UPLOAD_CONCURRENCY = 4;
@@ -421,7 +420,7 @@ export default function App() {
   const [filtro, setFiltro] = useState('');
   const [etapaFiltro, setEtapaFiltro] = useState('');
   const [activeView, setActiveView] = useState('production');
-  const [laserFilter, setLaserFilter] = useState('pending');
+  const [laserFilter, setLaserFilter] = useState('all');
   const [warehouseStatusByOrder, setWarehouseStatusByOrder] = useState(readWarehouseStatuses);
   const [warehouseOperatorByJob, setWarehouseOperatorByJob] = useState(readWarehouseOperators);
   const [warehouseSeparationByJob, setWarehouseSeparationByJob] = useState(readWarehouseSeparations);
@@ -613,10 +612,6 @@ export default function App() {
       const expectedBytes = Object.values(chunks)
         .flat()
         .reduce((total, body) => total + new TextEncoder().encode(body).byteLength, 0);
-      if (expectedBytes > MAX_UPLOAD_BYTES) {
-        toast.error('O envio excede o limite de 90 MiB. Divida os relatórios em arquivos menores.');
-        return;
-      }
       const started = await fetchApi('/api/data', {
         method: 'POST',
         body: JSON.stringify({ action: 'start', expectedBytes }),
@@ -713,7 +708,7 @@ export default function App() {
         reporter: step.reporter || '—',
         reported: step.reported,
         planned: step.qtd,
-        finished: step.qtd > 0 && step.reported >= step.qtd,
+        finished: Boolean(step.machine && step.reporter),
         rework: step.reworkQty,
         scrap: step.scrapQty,
       })))),
@@ -1099,7 +1094,7 @@ export default function App() {
                 <div className="integration-metrics integration-metrics-primary" aria-label="Resumo da produção CL">
                   {[
                     { label: 'Finalizados', value: finishedLaserRows.length, tone: 'available' },
-                    { label: 'Pendentes', value: awaitingLaserRows.length, tone: 'waiting' },
+                    { label: 'Aguardando PCP', value: awaitingLaserRows.length, tone: 'waiting' },
                   ].map((metric) => (
                     <div key={metric.label} className={`integration-metric metric-${metric.tone}`}>
                       <span className="integration-metric-value">{metric.value}</span>
@@ -1137,7 +1132,7 @@ export default function App() {
                   <div className="laser-list-controls">
                     <div className="filter-group" role="group" aria-label="Filtrar OPs da etapa CL">
                       {[
-                        ['pending', 'Pendentes'],
+                        ['pending', 'Aguardando PCP'],
                         ['separating', 'Em separação'],
                         ['shortage', 'Falta MP'],
                         ['delivered', 'Entregue na Laser'],

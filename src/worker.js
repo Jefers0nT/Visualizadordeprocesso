@@ -1,8 +1,7 @@
-const MAX_UPLOAD_BYTES = 90 * 1024 * 1024;
 const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
 const ROWS_PER_CHUNK = 100;
-const READ_CHUNKS_PER_QUERY = 44;
+const READ_CHUNKS_PER_QUERY = 10;
 const READ_QUERY_CONCURRENCY = 3;
 const MAX_SINGLE_READ_BYTES = 40 * 1024 * 1024;
 const MAX_CHUNKS_PER_KIND = MAX_ROWS_PER_KIND / ROWS_PER_CHUNK;
@@ -203,16 +202,16 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
   if (!canReadAllChunks) {
     const summary = await db
       .prepare(`
-        SELECT kind, COUNT(*) AS chunk_count, SUM(length(payload)) AS payload_bytes
+        SELECT kind, COUNT(*) AS chunk_count, SUM(length(CAST(payload AS BLOB))) AS payload_bytes
         FROM dataset_chunks WHERE snapshot_id = ? GROUP BY kind
       `)
       .bind(snapshotId)
       .all();
     const payloadSizes = new Map(summary.results.map((row) => [row.kind, row.payload_bytes]));
     chunkCounts = new Map(summary.results.map((row) => [row.kind, row.chunk_count]));
-    canReadAllChunks = kinds.every(
-      (kind) => (payloadSizes.get(kind) || 0) <= MAX_SINGLE_READ_BYTES,
-    );
+    canReadAllChunks = kinds.reduce(
+      (total, kind) => total + (payloadSizes.get(kind) || 0), 0,
+    ) <= MAX_SINGLE_READ_BYTES;
   }
 
   if (canReadAllChunks) {
@@ -376,8 +375,8 @@ async function cleanupExpiredUploads(db) {
 }
 
 async function startDatasetUpload(db, expectedBytes) {
-  if (!Number.isInteger(expectedBytes) || expectedBytes < 1 || expectedBytes > MAX_UPLOAD_BYTES) {
-    return { error: 'O envio excede o limite de 90 MiB.', status: 413 };
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 1) {
+    return { error: 'O tamanho informado para o envio é inválido.', status: 400 };
   }
 
   await cleanupExpiredUploads(db);
