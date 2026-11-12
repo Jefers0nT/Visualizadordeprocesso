@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
-import { groupLaserSchedule, parseLaserWorksheet, validLaserSchedule } from './laser-schedule.js';
+import { groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, validLaserSchedule } from './laser-schedule.js';
+
+test('labels partial CL progress without changing zero and complete statuses', () => {
+  const cases = [
+    [{ planned: 190, reported: 0, complete: false }, 'Em andamento'],
+    [{ planned: 190, reported: 98, complete: false }, 'Corte Parcial'],
+    [{ planned: 190, reported: 189, complete: false }, 'Corte Parcial'],
+    [{ planned: 190, reported: 190, complete: true }, 'Concluído'],
+    [{ planned: 190, reported: 200, complete: true }, 'Concluído'],
+    [{ planned: 0, reported: 1, complete: false }, 'Em andamento'],
+  ];
+  for (const [program, expected] of cases) {
+    assert.equal(laserProgramStatus(program).label, expected);
+  }
+});
 
 test('parses a sequenciamento workbook and calculates matching CL load once per program', async () => {
   const workbook = new ExcelJS.Workbook();
@@ -78,6 +92,7 @@ test('uses all CL stages of the production job for each associated program', () 
   assert.equal(secondProgram.ambiguous, true);
   assert.equal(result.machines[0].completedJobs, 0);
   assert.equal(result.machines[0].jobs.length, 1);
+  assert.deepEqual(laserJobCounts(result.machines[0].jobs), { complete: 0, partial: 1, progress: 0 });
   assert.equal(result.machines[0].jobs[0].job, 'JOB1');
   assert.deepEqual(firstProgram.clOps.map(({ num, totalQty, reportedQty }) => ({ num, totalQty, reportedQty })), [
     { num: '1', totalQty: 10, reportedQty: 15 },
@@ -110,4 +125,15 @@ test('matches program names to jobs and resolves complementary names from OPs', 
   assert.equal(result.machines[0].jobs.length, 1);
   assert.equal(result.machines[1].programs[1].found, false);
   assert.equal(result.machines[1].hours, 1);
+});
+
+test('counts unique machine jobs by progress status', () => {
+  const jobs = [
+    { complete: true, planned: 10, reported: 10 },
+    { complete: false, planned: 10, reported: 5 },
+    { complete: false, planned: 10, reported: 0 },
+    { complete: false, planned: 0, reported: 0 },
+  ];
+  assert.deepEqual(laserJobCounts(jobs), { complete: 1, partial: 1, progress: 2 });
+  assert.deepEqual(laserJobCounts([]), { complete: 0, partial: 0, progress: 0 });
 });

@@ -4,6 +4,25 @@ const MAX_SCHEDULE_ROWS = 10_000;
 const normalize = (value) => String(value).normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 
+export function laserProgramStatus(program) {
+  if (program.complete) return { label: 'Concluído', className: 'laser-status-complete' };
+  if (program.planned > 0 && program.reported > 0 && program.reported < program.planned) {
+    return { label: 'Corte Parcial', className: 'laser-status-partial' };
+  }
+  return { label: 'Em andamento', className: 'laser-status-progress' };
+}
+
+export function laserJobCounts(jobs) {
+  const counts = { complete: 0, partial: 0, progress: 0 };
+  for (const job of jobs) {
+    const status = laserProgramStatus(job).className;
+    if (status === 'laser-status-complete') counts.complete += 1;
+    else if (status === 'laser-status-partial') counts.partial += 1;
+    else counts.progress += 1;
+  }
+  return counts;
+}
+
 export function normalizeOp(value) {
   const text = String(value).trim();
   return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, '') : text.toUpperCase();

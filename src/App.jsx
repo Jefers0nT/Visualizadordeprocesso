@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
-import { groupLaserSchedule, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet } from './laser-schedule.js';
+import { groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet } from './laser-schedule.js';
 
 const decode = (buf) => {
   try {
@@ -364,6 +364,7 @@ function JobGroup({ job, list, jobComplete, jobEmission }) {
 
 function LaserProgramRow({ program }) {
   const [isOpen, setIsOpen] = useState(false);
+  const status = program.found ? laserProgramStatus(program) : null;
 
   return (
     <>
@@ -383,8 +384,8 @@ function LaserProgramRow({ program }) {
         <td>{program.found ? percent(program.reported, program.planned) : '—'}</td>
         <td>
           {program.found ? (
-            <span className={`integration-status ${program.complete ? 'laser-status-complete' : 'laser-status-progress'}`}>
-              {program.complete ? 'Concluído' : 'Em andamento'}
+            <span className={`integration-status ${status.className}`}>
+              {status.label}
             </span>
           ) : program.ambiguous ? 'Vários Jobs encontrados' : 'Não encontrado'}
         </td>
@@ -1006,7 +1007,9 @@ export default function App() {
                   ) : (
                     <>
                       <div className="laser-dashboard" aria-label="Resumo das máquinas">
-                        {laserLoad.machines.map((machine) => (
+                        {laserLoad.machines.map((machine) => {
+                          const counts = laserJobCounts(machine.jobs);
+                          return (
                           <article className="laser-dashboard-card" key={machine.machine}>
                             <h4>{machine.machine}</h4>
                             <div className="laser-dashboard-hours">
@@ -1015,10 +1018,15 @@ export default function App() {
                             </div>
                             <div className="laser-dashboard-counts">
                               <span><strong>{machine.programs.length}</strong> programa(s)</span>
-                              <span><strong>{machine.completedJobs}/{machine.jobs.length}</strong> Jobs concluídos</span>
+                            </div>
+                            <div className="laser-dashboard-statuses" aria-label={`Status dos Jobs de ${machine.machine}`}>
+                              <span className="laser-status-complete"><strong>{counts.complete}</strong> Concluídos</span>
+                              <span className="laser-status-partial"><strong>{counts.partial}</strong> Corte parcial</span>
+                              <span className="laser-status-progress"><strong>{counts.progress}</strong> Em andamento</span>
                             </div>
                           </article>
-                        ))}
+                          );
+                        })}
                       </div>
                       <div className="laser-load-machines" role="group" aria-label="Filtrar por máquina">
                         {laserLoad.machines.map((machine) => (
