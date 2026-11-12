@@ -23,6 +23,28 @@ export function laserJobCounts(jobs) {
   return counts;
 }
 
+export function estimateLaserHours(programs) {
+  let total = 0;
+  let cut = 0;
+  let unverified = 0;
+  for (const program of programs) {
+    total += program.hours;
+    if (!program.found) {
+      unverified += program.hours;
+      continue;
+    }
+    const hoursPerOp = program.hours / program.clOps.length;
+    for (const op of program.clOps) {
+      if (op.totalQty <= 0) {
+        unverified += hoursPerOp;
+        continue;
+      }
+      cut += hoursPerOp * Math.max(0, Math.min(op.reportedQty / op.totalQty, 1));
+    }
+  }
+  return { total, cut, remaining: Math.max(0, total - cut), unverified };
+}
+
 export function normalizeOp(value) {
   const text = String(value).trim();
   return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, '') : text.toUpperCase();

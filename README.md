@@ -56,6 +56,8 @@ O progresso de cada programa considera todas as etapas CL do Job associado, incl
 
 O painel resume, para cada máquina, a carga dos programas encontrados, a quantidade de programas importados e os Jobs identificados por status: concluídos, corte parcial e em andamento. Programas sem Job identificado não entram nesses totais. Os botões filtram a máquina selecionada e mostram todos os programas importados. Ao clicar em um programa identificado, são exibidas todas as OPs do Job que têm etapa CL, com o mesmo progresso da Visão de produção filtrada por CL; cada OP pode ser expandida para ver suas etapas. OPs do Job não listadas no XLSX também são mostradas, pois compõem o percentual do Job.
 
+O painel também estima as horas cortadas e restantes por máquina. Para cada programa identificado, divide-se sua carga igualmente entre todas as OPs CL do Job e aplica-se a cada parcela a proporção reportada sobre a planejada daquela OP, limitada a 0–100%. Programas não encontrados ou ambíguos e parcelas de OPs sem quantidade planejada positiva são consideradas integralmente pendentes. A carga total usada nessa estimativa inclui esses programas, diferentemente da carga de programas encontrados. É uma estimativa, não uma medição do tempo real de corte.
+
 Para invalidar todas as sessões ativas, troque `SESSION_SECRET` com `npx wrangler secret put SESSION_SECRET`. Para acesso individual por usuário, será necessário migrar para um provedor de identidade.
 
 ## Desenvolvimento local

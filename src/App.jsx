@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
-import { groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet } from './laser-schedule.js';
+import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet } from './laser-schedule.js';
 
 const decode = (buf) => {
   try {
@@ -984,6 +984,10 @@ export default function App() {
                       <p className="laser-load-description">
                         O progresso considera todas as etapas CL do Job na Visão de produção.
                       </p>
+                      <p className="laser-load-description">
+                        Horas estimadas dividem a carga de cada programa igualmente entre as OPs CL do Job.
+                        Programas não encontrados e OPs sem quantidade planejada são considerados pendentes.
+                      </p>
                       {laserSchedule.updatedAt && (
                         <span className="dataset-updated">
                           Sequenciamento importado em {new Date(laserSchedule.updatedAt).toLocaleString('pt-BR')}
@@ -1009,12 +1013,22 @@ export default function App() {
                       <div className="laser-dashboard" aria-label="Resumo das máquinas">
                         {laserLoad.machines.map((machine) => {
                           const counts = laserJobCounts(machine.jobs);
+                          const estimate = estimateLaserHours(machine.programs);
                           return (
                           <article className="laser-dashboard-card" key={machine.machine}>
                             <h4>{machine.machine}</h4>
                             <div className="laser-dashboard-hours">
                               <strong>{machine.hours.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</strong>
                               <span>de programas encontrados</span>
+                            </div>
+                            <div className="laser-dashboard-estimate">
+                              <div className="laser-dashboard-estimate-heading">
+                                <strong>{estimate.remaining.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</strong>
+                                <span>estimadas para cortar</span>
+                              </div>
+                              <strong className="laser-dashboard-cut">
+                                {estimate.cut.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h cortadas
+                              </strong>
                             </div>
                             <div className="laser-dashboard-counts">
                               <span><strong>{machine.programs.length}</strong> programa(s)</span>

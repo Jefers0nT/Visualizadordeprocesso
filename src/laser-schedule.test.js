@@ -1,7 +1,41 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
-import { groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, validLaserSchedule } from './laser-schedule.js';
+import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, validLaserSchedule } from './laser-schedule.js';
+
+test('estimates remaining hours equally per CL OP and includes unmatched programs', () => {
+  const rows = [
+    { machine: 'A', program: 'JOB', sequence: 1, hours: 10, ops: ['1'] },
+    { machine: 'A', program: 'MISSING', sequence: 2, hours: 3, ops: ['unknown'] },
+    { machine: 'B', program: 'JOB', sequence: 1, hours: 4, ops: ['2'] },
+  ];
+  const jobs = [['JOB', [
+    { num: '1', steps: [{ stageCode: 'CL', qtd: 10, reported: 10 }] },
+    { num: '2', steps: [{ stageCode: 'CL', qtd: 20, reported: 10 }] },
+  ]]];
+  const { machines } = groupLaserSchedule(rows, jobs);
+  assert.deepEqual(estimateLaserHours(machines[0].programs), {
+    total: 13, cut: 7.5, remaining: 5.5, unverified: 3,
+  });
+  assert.deepEqual(estimateLaserHours(machines[1].programs), {
+    total: 4, cut: 3, remaining: 1, unverified: 0,
+  });
+});
+
+test('treats zero planned quantities as unverified and clamps over-reported quantities', () => {
+  const programs = [
+    { found: true, hours: 12, clOps: [
+      { totalQty: 0, reportedQty: 1 },
+      { totalQty: 10, reportedQty: 20 },
+      { totalQty: 10, reportedQty: -3 },
+    ] },
+    { found: false, ambiguous: true, hours: 2 },
+  ];
+  assert.deepEqual(estimateLaserHours(programs), {
+    total: 14, cut: 4, remaining: 10, unverified: 6,
+  });
+  assert.deepEqual(estimateLaserHours([]), { total: 0, cut: 0, remaining: 0, unverified: 0 });
+});
 
 test('labels partial CL progress without changing zero and complete statuses', () => {
   const cases = [

@@ -812,9 +812,33 @@ button {
 }
 
 .laser-dashboard-hours span,
+.laser-dashboard-estimate span,
 .laser-dashboard-counts {
   color: var(--text-soft);
   font-size: 0.8rem;
+}
+
+.laser-dashboard-estimate {
+  display: grid;
+  gap: 3px;
+  margin-top: 10px;
+}
+
+.laser-dashboard-estimate strong {
+  color: #fdba74;
+  font-size: 1.15rem;
+}
+
+.laser-dashboard-estimate .laser-dashboard-cut {
+  color: #86efac;
+  font-size: 0.95rem;
+}
+
+.laser-dashboard-estimate-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
 }
 
 .laser-dashboard-counts {
