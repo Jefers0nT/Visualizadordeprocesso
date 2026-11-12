@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw, X } from 'lucide-react';
+import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
+import { groupLaserSchedule, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet } from './laser-schedule.js';
 
 const decode = (buf) => {
   try {
@@ -224,57 +225,6 @@ const STYLE = {
 
 const sty = (status) => STYLE[status] || STYLE.default;
 
-const WAREHOUSE_STATUS_STORAGE_KEY = 'visualizador-pcp-almoxarifado-status';
-const WAREHOUSE_OPERATOR_STORAGE_KEY = 'visualizador-pcp-almoxarifado-operadores';
-const WAREHOUSE_SEPARATION_STORAGE_KEY = 'visualizador-pcp-separacao';
-const WAREHOUSE_STATUS_OPTIONS = [
-  { value: 'awaiting', label: 'Aguardando PCP', tone: 'pending' },
-  { value: 'shortage', label: 'Falta MP', tone: 'critical' },
-  { value: 'separating', label: 'Em separação', tone: 'waiting' },
-  { value: 'delivered', label: 'Entregue na Laser', tone: 'delivered' },
-];
-const FINALIZED_WAREHOUSE_STATUS = { value: 'finalized', label: 'Finalizado', tone: 'available' };
-
-function readWarehouseStatuses() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(WAREHOUSE_STATUS_STORAGE_KEY) || '{}');
-    return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
-  } catch {
-    return {};
-  }
-}
-
-function readWarehouseOperators() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(WAREHOUSE_OPERATOR_STORAGE_KEY) || '{}');
-    return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
-  } catch {
-    return {};
-  }
-}
-
-function readWarehouseSeparations() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(WAREHOUSE_SEPARATION_STORAGE_KEY) || '{}');
-    return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
-  } catch {
-    return {};
-  }
-}
-
-function localDateValue() {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function warehouseStatusForOrder(row, statuses) {
-  if (row.finished) return FINALIZED_WAREHOUSE_STATUS.value;
-  const savedStatus = statuses[row.orderKey];
-  return WAREHOUSE_STATUS_OPTIONS.some((option) => option.value === savedStatus)
-    ? savedStatus
-    : 'awaiting';
-}
-
 function StepNode({ s }) {
   const c = sty(s.st);
 
@@ -412,6 +362,49 @@ function JobGroup({ job, list, jobComplete, jobEmission }) {
   );
 }
 
+function LaserProgramRow({ program }) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <>
+      <tr className={program.found ? undefined : 'laser-program-not-found'}>
+        <td>{program.sequence}</td>
+        <td>
+          {program.found ? (
+            <button type="button" className="laser-program-toggle" aria-expanded={isOpen}
+              onClick={() => setIsOpen((open) => !open)}>
+              <ChevronRight className={`chevron ${isOpen ? 'laser-program-chevron-open' : ''}`} />
+              {program.program}
+            </button>
+          ) : program.program}
+        </td>
+        <td>{program.hours.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</td>
+        <td>{program.found ? `${program.reported.toLocaleString('pt-BR')} / ${program.planned.toLocaleString('pt-BR')}` : '—'}</td>
+        <td>{program.found ? percent(program.reported, program.planned) : '—'}</td>
+        <td>
+          {program.found ? (
+            <span className={`integration-status ${program.complete ? 'laser-status-complete' : 'laser-status-progress'}`}>
+              {program.complete ? 'Concluído' : 'Em andamento'}
+            </span>
+          ) : program.ambiguous ? 'Vários Jobs encontrados' : 'Não encontrado'}
+        </td>
+      </tr>
+      {program.found && isOpen && (
+        <tr className="laser-program-details">
+          <td colSpan={6}>
+            <section aria-label={`OPs do programa ${program.program}`}>
+              <p>OPs do Job {program.job} · etapa CL</p>
+              <div className="job-list">
+                {program.clOps.map((op) => <OpCard key={op.num} op={op} />)}
+              </div>
+            </section>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
 export default function App() {
   const [ops, setOps] = useState([]);
   const [ordens, setOrdens] = useState([]);
@@ -420,16 +413,7 @@ export default function App() {
   const [filtro, setFiltro] = useState('');
   const [etapaFiltro, setEtapaFiltro] = useState('');
   const [activeView, setActiveView] = useState('production');
-  const [laserFilter, setLaserFilter] = useState('all');
-  const [warehouseStatusByOrder, setWarehouseStatusByOrder] = useState(readWarehouseStatuses);
-  const [warehouseOperatorByJob, setWarehouseOperatorByJob] = useState(readWarehouseOperators);
-  const [warehouseSeparationByJob, setWarehouseSeparationByJob] = useState(readWarehouseSeparations);
-  const [separationDialogOpen, setSeparationDialogOpen] = useState(false);
-  const [separationJobQuery, setSeparationJobQuery] = useState('');
-  const [separationJob, setSeparationJob] = useState('');
-  const [separationOperator, setSeparationOperator] = useState('');
-  const [separationDate, setSeparationDate] = useState(localDateValue);
-  const [separationMachine, setSeparationMachine] = useState('');
+  const [selectedMachine, setSelectedMachine] = useState('');
   const [over, setOver] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -440,48 +424,12 @@ export default function App() {
   const [loadError, setLoadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [updatedAt, setUpdatedAt] = useState('');
+  const [laserSchedule, setLaserSchedule] = useState({ rows: [], updatedAt: null });
+  const [scheduleError, setScheduleError] = useState('');
+  const [savingSchedule, setSavingSchedule] = useState(false);
   const fileRef = useRef(null);
+  const scheduleFileRef = useRef(null);
   const dirRef = useRef(null);
-  const separationDialogRef = useRef(null);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(WAREHOUSE_STATUS_STORAGE_KEY, JSON.stringify(warehouseStatusByOrder));
-    } catch {
-      toast.error('Não foi possível salvar os status do almoxarifado neste navegador.');
-    }
-  }, [warehouseStatusByOrder]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(WAREHOUSE_OPERATOR_STORAGE_KEY, JSON.stringify(warehouseOperatorByJob));
-    } catch {
-      toast.error('Não foi possível salvar os operadores neste navegador.');
-    }
-  }, [warehouseOperatorByJob]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(WAREHOUSE_SEPARATION_STORAGE_KEY, JSON.stringify(warehouseSeparationByJob));
-    } catch {
-      toast.error('Não foi possível salvar os dados de separação neste navegador.');
-    }
-  }, [warehouseSeparationByJob]);
-
-  useEffect(() => {
-    const dialog = separationDialogRef.current;
-    if (!dialog) return;
-    if (separationDialogOpen && !dialog.open) dialog.showModal();
-    if (!separationDialogOpen && dialog.open) dialog.close();
-  }, [separationDialogOpen]);
-
-  useEffect(() => {
-    const dialog = separationDialogRef.current;
-    if (!dialog) return;
-    if (separationDialogOpen && !dialog.open) dialog.showModal();
-    if (!separationDialogOpen && dialog.open) dialog.close();
-  }, [separationDialogOpen]);
-
   const loadSharedData = useCallback(async ({ showToast = false } = {}) => {
     setLoading(true);
     setLoadError('');
@@ -496,6 +444,15 @@ export default function App() {
       setOrdens(dataset.ordens);
       setApontamentos(dataset.apontamentos || []);
       setUpdatedAt(dataset.updatedAt || '');
+      try {
+        const schedule = await fetchApi('/api/laser-schedule');
+        setLaserSchedule(schedule);
+        setScheduleError('');
+      } catch (error) {
+        if (error.status === 401) throw error;
+        setLaserSchedule({ rows: [], updatedAt: null });
+        setScheduleError(error.message);
+      }
       if (showToast) toast.success('Dados atualizados');
     } catch (error) {
       setAuthChecked(true);
@@ -506,6 +463,8 @@ export default function App() {
         setOrdens([]);
         setApontamentos([]);
         setUpdatedAt('');
+        setLaserSchedule({ rows: [], updatedAt: null });
+        setScheduleError('');
       } else {
         setLoadError(error.message);
       }
@@ -551,6 +510,8 @@ export default function App() {
       setOrdens([]);
       setApontamentos([]);
       setUpdatedAt('');
+      setLaserSchedule({ rows: [], updatedAt: null });
+      setScheduleError('');
       setAuthChecked(true);
     } catch (error) {
       toast.error(error.message);
@@ -662,6 +623,33 @@ export default function App() {
     }
   };
 
+  const handleLaserSchedule = async (file) => {
+    if (!file || !isAdmin || savingSchedule) return;
+    setSavingSchedule(true);
+    try {
+      if (!/\.xlsx$/i.test(file.name)) throw new Error('Selecione uma planilha XLSX.');
+      if (file.size > 10 * 1024 * 1024) throw new Error('A planilha excede 10 MiB.');
+      const { default: ExcelJS } = await import('exceljs/dist/exceljs.min.js');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await file.arrayBuffer());
+      const worksheet = workbook.getWorksheet('Sequenciamento laser') || workbook.worksheets[0];
+      if (!worksheet) throw new Error('A planilha não contém nenhuma aba.');
+      const rows = parseLaserWorksheet(worksheet);
+      const body = JSON.stringify(rows);
+      if (new TextEncoder().encode(body).byteLength > MAX_LASER_SCHEDULE_BYTES) {
+        throw new Error('O sequenciamento processado excede 1 MiB.');
+      }
+      const result = await fetchApi('/api/laser-schedule', { method: 'PUT', body });
+      setLaserSchedule({ rows, updatedAt: result.updatedAt });
+      setScheduleError('');
+      toast.success(`${rows.length} programa(s) de laser importado(s) para todos os usuários.`);
+    } catch (error) {
+      toast.error(`Não foi possível importar o sequenciamento: ${error.message}`);
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
   const tree = useMemo(() => buildTree(ops, ordens, apontamentos), [ops, ordens, apontamentos]);
   const allOps = useMemo(() => tree.flatMap(([, list]) => list), [tree]);
   const allSteps = useMemo(() => allOps.flatMap((op) => op.steps), [allOps]);
@@ -696,122 +684,12 @@ export default function App() {
     },
     [allSteps],
   );
-  const laserRows = useMemo(
-    () => tree.flatMap(([job, jobOps]) => jobOps.flatMap((op) => op.steps
-      .filter((step) => step.stageCode === 'CL' && normalizeHeader(step.desc) === 'pi de corte laser')
-      .map((step) => ({
-        orderKey: String(step.ord || '').trim(),
-        job: job || '—',
-        op: op.num,
-        item: step.item || '—',
-        machine: step.machine || '—',
-        reporter: step.reporter || '—',
-        reported: step.reported,
-        planned: step.qtd,
-        finished: Boolean(step.machine && step.reporter),
-        rework: step.reworkQty,
-        scrap: step.scrapQty,
-      })))),
-    [tree],
+  const laserLoad = useMemo(
+    () => groupLaserSchedule(laserSchedule.rows, tree),
+    [laserSchedule.rows, tree],
   );
-  const pendingLaserRows = useMemo(() => laserRows.filter((row) => !row.finished), [laserRows]);
-  const finishedLaserRows = useMemo(() => laserRows.filter((row) => row.finished), [laserRows]);
-  const getWarehouseStatus = (row) => warehouseStatusForOrder(row, warehouseStatusByOrder);
-  const getWarehouseStatusOption = (row) => row.finished
-    ? FINALIZED_WAREHOUSE_STATUS
-    : WAREHOUSE_STATUS_OPTIONS.find((option) => option.value === getWarehouseStatus(row))
-      || WAREHOUSE_STATUS_OPTIONS[0];
-  const awaitingLaserRows = pendingLaserRows.filter((row) => getWarehouseStatus(row) === 'awaiting');
-  const laserStatusMetrics = WAREHOUSE_STATUS_OPTIONS.map((option) => ({
-    ...option,
-    count: pendingLaserRows.filter((row) => getWarehouseStatus(row) === option.value).length,
-  }));
-  const separationJobs = useMemo(() => {
-    const jobs = new Map();
-    pendingLaserRows.forEach((row) => {
-      if (!jobs.has(row.job)) jobs.set(row.job, []);
-      jobs.get(row.job).push(row);
-    });
-    return [...jobs.entries()]
-      .map(([job, rows]) => {
-        const statusValues = [...new Set(
-          rows.map((row) => warehouseStatusForOrder(row, warehouseStatusByOrder)),
-        )];
-        const status = statusValues.length === 1
-          ? WAREHOUSE_STATUS_OPTIONS.find((option) => option.value === statusValues[0]) || WAREHOUSE_STATUS_OPTIONS[0]
-          : { label: 'Status misto', tone: 'waiting' };
-        return { job, rows, status };
-      })
-      .sort((a, b) => a.job.localeCompare(b.job));
-  }, [pendingLaserRows, warehouseStatusByOrder]);
-  const visibleSeparationJobs = useMemo(() => {
-    const query = separationJobQuery.trim().toLowerCase();
-    return separationJobs.filter((entry) => !query || entry.job.toLowerCase().includes(query));
-  }, [separationJobs, separationJobQuery]);
-  const activeSeparationJob = separationJobs.find((entry) => entry.job === separationJob);
-  const separationMachineOptions = useMemo(() => [...new Set(
-    laserRows
-      .filter((row) => row.job === separationJob)
-      .flatMap((row) => row.machine.split(', '))
-      .filter((machine) => machine && machine !== '—'),
-  )].sort((a, b) => a.localeCompare(b)), [laserRows, separationJob]);
-
-  const openSeparationDialog = () => {
-    setSeparationJobQuery('');
-    setSeparationJob('');
-    setSeparationOperator('');
-    setSeparationDate(localDateValue());
-    setSeparationMachine('');
-    setSeparationDialogOpen(true);
-  };
-
-  const handleSeparationJobChange = (job) => {
-    setSeparationJob(job);
-    const saved = warehouseSeparationByJob[job];
-    setSeparationOperator(saved?.operator || warehouseOperatorByJob[job] || '');
-    setSeparationDate(saved?.date || localDateValue());
-    const machines = [...new Set(laserRows
-      .filter((row) => row.job === job)
-      .flatMap((row) => row.machine.split(', '))
-      .filter((machine) => machine && machine !== '—'))];
-    setSeparationMachine(saved?.machine || machines[0] || '');
-  };
-
-  const updateSelectedJobStatus = (status) => {
-    if (!activeSeparationJob) {
-      toast.error('Selecione um Job para continuar.');
-      return;
-    }
-    const operator = separationOperator.trim();
-    if (!operator || !separationDate) {
-      toast.error('Informe o responsável e a data da separação.');
-      return;
-    }
-
-    setWarehouseStatusByOrder((current) => ({
-      ...current,
-      ...Object.fromEntries(activeSeparationJob.rows.map((row) => [row.orderKey, status])),
-    }));
-    setWarehouseOperatorByJob((current) => ({ ...current, [activeSeparationJob.job]: operator }));
-    setWarehouseSeparationByJob((current) => ({
-      ...current,
-      [activeSeparationJob.job]: {
-        operator,
-        date: separationDate,
-        machine: separationMachine.trim(),
-        status,
-      },
-    }));
-    setSeparationDialogOpen(false);
-    toast.success(`Status atualizado para o Job ${activeSeparationJob.job}`);
-  };
-  const laserVisibleRows = laserRows.filter((row) => {
-    if (laserFilter === 'finished') return row.finished;
-    if (laserFilter === 'all') return true;
-    if (row.finished) return false;
-    const status = getWarehouseStatus(row);
-    return laserFilter === 'pending' ? status === 'awaiting' : status === laserFilter;
-  });
+  const activeMachine = laserLoad.machines.find((machine) => machine.machine === selectedMachine)
+    || laserLoad.machines[0];
   const jobEmissions = useMemo(() => new Map(tree.map(([job, list]) => {
     const dates = list.map((op) => op.emissao).filter(Boolean);
     dates.sort((a, b) => dateSortValue(a) - dateSortValue(b));
@@ -952,6 +830,17 @@ export default function App() {
                 event.target.value = '';
               }}
             />
+            <input
+              ref={scheduleFileRef}
+              type="file"
+              accept=".xlsx"
+              hidden
+              disabled={savingSchedule}
+              onChange={(event) => {
+                handleLaserSchedule(event.target.files[0]);
+                event.target.value = '';
+              }}
+            />
           </>
         )}
 
@@ -1030,7 +919,7 @@ export default function App() {
               type="button"
               className="secondary-button refresh-button"
               onClick={() => loadSharedData({ showToast: true })}
-              disabled={loading}
+              disabled={loading || savingSchedule}
             >
               <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
               Atualizar
@@ -1055,11 +944,6 @@ export default function App() {
         {authenticated && activeView === 'integration' && (
           <section className="integration-panel" role="tabpanel" aria-labelledby="integration-tab">
             <header className="integration-heading">
-              <div>
-                <p className="integration-eyebrow">Escopo da visão · CL</p>
-                <h2>Corte Laser</h2>
-                <p>Acompanhamento de Jobs para Corte Laser</p>
-              </div>
               <div className="integration-actions">
                 {updatedAt && (
                   <span className="dataset-updated">
@@ -1070,7 +954,7 @@ export default function App() {
                   type="button"
                   className="secondary-button refresh-button"
                   onClick={() => loadSharedData({ showToast: true })}
-                  disabled={loading}
+                  disabled={loading || savingSchedule}
                 >
                   <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
                   Atualizar
@@ -1091,218 +975,85 @@ export default function App() {
             </header>
 
             <div className="integration-production" role="tabpanel" aria-label="Produção CL">
-                <div className="integration-metrics integration-metrics-primary" aria-label="Resumo da produção CL">
-                  {[
-                    { label: 'Finalizados', value: finishedLaserRows.length, tone: 'available' },
-                    { label: 'Aguardando PCP', value: awaitingLaserRows.length, tone: 'waiting' },
-                  ].map((metric) => (
-                    <div key={metric.label} className={`integration-metric metric-${metric.tone}`}>
-                      <span className="integration-metric-value">{metric.value}</span>
-                      <span className="integration-metric-label">{metric.label}</span>
+                <section className="laser-load" aria-labelledby="laser-load-heading">
+                  <div className="integration-section-heading">
+                    <div>
+                      <p className="integration-eyebrow">SEQUENCIAMENTO · CL</p>
+                      <h3 id="laser-load-heading">Carga por máquina</h3>
+                      <p className="laser-load-description">
+                        O progresso considera todas as etapas CL do Job na Visão de produção.
+                      </p>
+                      {laserSchedule.updatedAt && (
+                        <span className="dataset-updated">
+                          Sequenciamento importado em {new Date(laserSchedule.updatedAt).toLocaleString('pt-BR')}
+                        </span>
+                      )}
                     </div>
-                  ))}
-                </div>
-
-                <div className="laser-status-breakdown" aria-label="Situação das OPs pendentes">
-                  <span className="laser-status-breakdown-title">Situação das pendentes</span>
-                  <div className="laser-status-items">
-                    {laserStatusMetrics.map((metric) => (
-                      <div key={metric.value} className={`laser-status-count status-${metric.tone}`}>
-                        <strong>{metric.count}</strong>
-                        <span>{metric.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="integration-section-heading">
-                  <div>
-                    <p className="integration-eyebrow">CL · PI DE CORTE LASER</p>
-                    <div className="laser-title-row">
-                      <h3>OPs da etapa de corte</h3>
-                      <button
-                        type="button"
-                        className="primary-button separation-open-button"
-                        onClick={openSeparationDialog}
-                      >
-                        SEPARAÇÃO
+                    {isAdmin && (
+                      <button type="button" className="primary-button" disabled={savingSchedule || loading}
+                        onClick={() => scheduleFileRef.current?.click()}>
+                        <FileSpreadsheet className="button-icon" />
+                        {savingSchedule ? 'Importando...' : 'Importar sequenciamento XLSX'}
                       </button>
-                    </div>
+                    )}
                   </div>
-                  <div className="laser-list-controls">
-                    <div className="filter-group" role="group" aria-label="Filtrar OPs da etapa CL">
-                      {[
-                        ['pending', 'Aguardando PCP'],
-                        ['separating', 'Em separação'],
-                        ['shortage', 'Falta MP'],
-                        ['delivered', 'Entregue na Laser'],
-                        ['finished', 'Finalizados'],
-                        ['all', 'Todos'],
-                      ].map(([value, label]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={`filter-button ${laserFilter === value ? 'filter-button-active' : ''}`}
-                          onClick={() => setLaserFilter(value)}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="integration-sample-count">{laserVisibleRows.length} OPs</span>
-                  </div>
-                </div>
-                {laserVisibleRows.length === 0 ? (
-                  <div className="empty-state"><p>Nenhuma OP encontrada para CL · PI DE CORTE LASER</p></div>
-                ) : (
-                  <div className="integration-table-wrap">
-                    <table className={`integration-table integration-production-table ${laserFilter === 'finished' ? 'integration-production-finished' : ''}`}>
-                      <thead>
-                        <tr>
-                          <th scope="col">Job</th>
-                          <th scope="col">OP</th>
-                          <th scope="col">Ord Prod</th>
-                          <th scope="col">Item</th>
-                          <th scope="col">Máquina</th>
-                          <th scope="col">Reportado / planejado</th>
-                          <th scope="col">Retrabalho</th>
-                          <th scope="col">Refugo</th>
-                          <th scope="col">Responsável</th>
-                          <th scope="col">STATUS</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {laserVisibleRows.map((row) => {
-                          const status = getWarehouseStatusOption(row);
-                          return (
-                            <tr key={row.orderKey}>
-                              <td>{row.job}</td>
-                              <th scope="row">{row.op}</th>
-                              <td>{row.orderKey}</td>
-                              <td title={row.item}>{row.item}</td>
-                              <td title={row.machine}>{row.machine}</td>
-                              <td>{row.reported} / {row.planned}</td>
-                              <td>{row.rework}</td>
-                              <td>{row.scrap}</td>
-                              <td title={row.reporter}>{row.reporter}</td>
-                              <td>
-                                {row.finished ? (
-                                  <span className={`integration-status status-${status.tone}`}>Finalizado</span>
-                                ) : (
-                                  <select
-                                    className={`warehouse-status-select status-${status.tone}`}
-                                    aria-label={`Status da Ord Prod ${row.orderKey}`}
-                                    value={status.value}
-                                    onChange={(event) => setWarehouseStatusByOrder((current) => ({
-                                      ...current,
-                                      [row.orderKey]: event.target.value,
-                                    }))}
-                                  >
-                                    {WAREHOUSE_STATUS_OPTIONS.map((option) => (
-                                      <option key={option.value} value={option.value}>{option.label}</option>
-                                    ))}
-                                  </select>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              <dialog
-                ref={separationDialogRef}
-                className="separation-dialog"
-                onCancel={() => setSeparationDialogOpen(false)}
-                onClose={() => setSeparationDialogOpen(false)}
-              >
-                <header className="separation-dialog-header">
-                  <div>
-                    <p className="integration-eyebrow">MOVIMENTAÇÃO DE SAÍDA · CL</p>
-                    <h3>Separação de material</h3>
-                    <p>Selecione o Job, identifique o responsável e registre a movimentação.</p>
-                  </div>
-                  <button
-                    type="button"
-                    className="icon-button separation-dialog-close"
-                    aria-label="Fechar separação"
-                    onClick={() => setSeparationDialogOpen(false)}
-                  >
-                    <X className="button-icon" />
-                  </button>
-                </header>
-
-                <div className="separation-form-grid">
-                  <label className="operator-field">
-                    <span>Buscar nº do Job</span>
-                    <input
-                      type="search"
-                      value={separationJobQuery}
-                      onChange={(event) => setSeparationJobQuery(event.target.value)}
-                      placeholder="Ex.: 0311I"
-                    />
-                  </label>
-                  <label className="operator-field">
-                    <span>Nº Job</span>
-                    <select value={separationJob} onChange={(event) => handleSeparationJobChange(event.target.value)}>
-                      <option value="">Selecione um Job</option>
-                      {visibleSeparationJobs.map((entry) => (
-                        <option key={entry.job} value={entry.job}>
-                          {entry.job} · {entry.rows.length} OPs pendentes
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="operator-field">
-                    <span>Responsável pela separação</span>
-                    <input
-                      type="text"
-                      value={separationOperator}
-                      onChange={(event) => setSeparationOperator(event.target.value)}
-                      placeholder="Nome do operador"
-                      autoComplete="name"
-                    />
-                  </label>
-                  <label className="operator-field">
-                    <span>Data da separação</span>
-                    <input type="date" value={separationDate} onChange={(event) => setSeparationDate(event.target.value)} />
-                  </label>
-                  <label className="operator-field">
-                    <span>Máquina</span>
-                    <input
-                      type="text"
-                      list="cl-separation-machines"
-                      value={separationMachine}
-                      onChange={(event) => setSeparationMachine(event.target.value)}
-                      placeholder="Selecione ou informe a máquina"
-                    />
-                    <datalist id="cl-separation-machines">
-                      {separationMachineOptions.map((machine) => <option key={machine} value={machine} />)}
-                    </datalist>
-                  </label>
-                </div>
-
-                {activeSeparationJob && (
-                  <p className="separation-job-summary">
-                    {activeSeparationJob.rows.length} OPs pendentes serão atualizadas para o Job {activeSeparationJob.job}.
-                  </p>
-                )}
-
-                <footer className="separation-dialog-actions">
-                  <button type="button" className="secondary-button" onClick={() => updateSelectedJobStatus('separating')}>
-                    Iniciar separação
-                  </button>
-                  <button type="button" className="secondary-button" onClick={() => updateSelectedJobStatus('shortage')}>
-                    Registrar falta MP
-                  </button>
-                  <button type="button" className="primary-button" onClick={() => updateSelectedJobStatus('delivered')}>
-                    Entregue na Laser
-                  </button>
-                </footer>
-              </dialog>
+                  {scheduleError ? (
+                    <p className="laser-load-description" role="alert">{scheduleError}</p>
+                  ) : !laserSchedule.rows.length ? (
+                    <p className="laser-load-description">Nenhum sequenciamento importado.</p>
+                  ) : !laserLoad.machines.length ? (
+                    <p className="laser-load-description">Nenhum programa da planilha corresponde às OPs da etapa CL.</p>
+                  ) : (
+                    <>
+                      <div className="laser-dashboard" aria-label="Resumo das máquinas">
+                        {laserLoad.machines.map((machine) => (
+                          <article className="laser-dashboard-card" key={machine.machine}>
+                            <h4>{machine.machine}</h4>
+                            <div className="laser-dashboard-hours">
+                              <strong>{machine.hours.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</strong>
+                              <span>de programas encontrados</span>
+                            </div>
+                            <div className="laser-dashboard-counts">
+                              <span><strong>{machine.programs.length}</strong> programa(s)</span>
+                              <span><strong>{machine.completedJobs}/{machine.jobs.length}</strong> Jobs concluídos</span>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                      <div className="laser-load-machines" role="group" aria-label="Filtrar por máquina">
+                        {laserLoad.machines.map((machine) => (
+                          <button
+                            type="button"
+                            className={`laser-machine-button ${activeMachine.machine === machine.machine ? 'laser-machine-button-active' : ''}`}
+                            key={machine.machine}
+                            aria-pressed={activeMachine.machine === machine.machine}
+                            onClick={() => setSelectedMachine(machine.machine)}
+                          >
+                            {machine.machine}
+                          </button>
+                        ))}
+                      </div>
+                      <section className="laser-load-machine" aria-label={`Carga da máquina ${activeMachine.machine}`}>
+                        <h4 className="laser-machine-heading">{activeMachine.machine}</h4>
+                        {activeMachine.programs.length === 0 ? (
+                          <p className="laser-load-description laser-machine-empty">Nenhum programa desta máquina corresponde às OPs da etapa CL.</p>
+                        ) : (
+                          <div className="integration-table-wrap">
+                            <table className="integration-table">
+                              <thead><tr><th>Seq</th><th>Programa</th><th>Carga</th><th>Reportado / planejado</th><th>Progresso CL</th><th>Status</th></tr></thead>
+                              <tbody>
+                                {activeMachine.programs.map((program, index) => (
+                                  <LaserProgramRow key={`${activeMachine.machine}-${program.sequence}-${index}`} program={program} />
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </section>
+                    </>
+                  )}
+                </section>
+            </div>
           </section>
         )}
 

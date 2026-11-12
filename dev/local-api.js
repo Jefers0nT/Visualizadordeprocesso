@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { MAX_LASER_SCHEDULE_BYTES, validLaserSchedule } from '../src/laser-schedule.js';
 
 const MAX_CHUNK_BYTES = 1024 * 1024;
 const ROWS_PER_CHUNK = 100;
 const DATA_FILE = path.resolve('.local', 'dataset.json');
+const SCHEDULE_FILE = path.resolve('.local', 'laser-schedule.json');
 
 const emptyDataset = () => ({ ops: [], ordens: [], apontamentos: [], updatedAt: null });
 const normalizeHeader = (value) =>
@@ -48,20 +50,31 @@ function validProductionReports(rows) {
   return ['desc maquina', 'nome usuario'].every((header) => headers.has(header));
 }
 
-function localApi() {
+function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE } = {}) {
   let dataset = emptyDataset();
+  let schedule = { rows: [], updatedAt: null };
   const uploads = new Map();
-  const ready = readFile(DATA_FILE, 'utf8')
+  const datasetReady = readFile(dataFile, 'utf8')
     .then((contents) => {
       dataset = { ...emptyDataset(), ...JSON.parse(contents) };
     })
     .catch((error) => {
       if (error.code !== 'ENOENT') throw error;
     });
+  const scheduleReady = readFile(scheduleFile, 'utf8')
+    .then((contents) => {
+      schedule = JSON.parse(contents);
+      if (!validLaserSchedule(schedule.rows) || typeof schedule.updatedAt !== 'string') {
+        throw new Error('O sequenciamento local salvo é inválido.');
+      }
+    })
+    .catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
 
   const persist = async () => {
-    await mkdir(path.dirname(DATA_FILE), { recursive: true });
-    await writeFile(DATA_FILE, JSON.stringify(dataset));
+    await mkdir(path.dirname(dataFile), { recursive: true });
+    await writeFile(dataFile, JSON.stringify(dataset));
   };
 
   return {
@@ -72,7 +85,7 @@ function localApi() {
         if (!url.pathname.startsWith('/api/')) return next();
 
         try {
-          await ready;
+          await datasetReady;
           if (url.pathname === '/api/session' && request.method === 'GET') {
             return sendJson(response, { isAdmin: true });
           }
@@ -81,6 +94,22 @@ function localApi() {
           }
           if (url.pathname === '/api/logout' && request.method === 'POST') {
             return sendJson(response, { ok: true });
+          }
+          if (url.pathname === '/api/laser-schedule' && request.method === 'GET') {
+            await scheduleReady;
+            return sendJson(response, schedule);
+          }
+          if (url.pathname === '/api/laser-schedule' && request.method === 'PUT') {
+            await scheduleReady;
+            const rows = JSON.parse(await readBody(request, MAX_LASER_SCHEDULE_BYTES));
+            if (!validLaserSchedule(rows)) {
+              return sendJson(response, { error: 'O sequenciamento contém dados inválidos.' }, 400);
+            }
+            const nextSchedule = { rows, updatedAt: new Date().toISOString() };
+            await mkdir(path.dirname(scheduleFile), { recursive: true });
+            await writeFile(scheduleFile, JSON.stringify(nextSchedule));
+            schedule = nextSchedule;
+            return sendJson(response, { updatedAt: schedule.updatedAt }, 201);
           }
           if (url.pathname === '/api/data' && request.method === 'GET') {
             return sendJson(response, dataset);

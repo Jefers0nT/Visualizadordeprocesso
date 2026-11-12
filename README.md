@@ -50,6 +50,12 @@ O acesso é compartilhado, sem contas individuais ou histórico por usuário. O 
 
 5. Compartilhe a senha de consulta com os usuários. Para publicar ou atualizar dados, entre com a senha de administrador e envie juntos os três CSVs: OPs, Ordens de Produção e Apontamentos. Cada publicação substitui o conjunto anterior por completo; não é possível atualizar somente alguns relatórios. A tela mostra a data da última publicação. Um Job só aparece como **Finalizado** quando todas as suas etapas tiverem quantidade reportada igual ou superior à quantidade planejada.
 
+Na aba **Corte Laser**, o administrador pode importar separadamente o XLSX de sequenciamento, com as colunas `Máquina`, `Seq`, `Programa`, `Tempo (h)` e `OPs`. O programa é associado ao Job pelo nome exato, sem diferenciar maiúsculas de minúsculas, ou pelas OPs da planilha quando estas identificam um único Job. O Job precisa ter etapa CL nos dados de produção. Programas sem correspondência aparecem em vermelho como **Não encontrado**; se as OPs apontarem para mais de um Job sem correspondência pelo nome, o status será **Vários Jobs encontrados**. Esses programas não exibem percentual nem entram na carga total. A carga soma as horas de cada programa identificado uma vez por máquina e não é rateada entre OPs. A importação substitui o sequenciamento anterior e fica disponível para todos os usuários, independentemente da atualização dos CSVs. O XLSX pode ter até 10 MiB e o sequenciamento processado até 1 MiB ou 10.000 programas.
+
+O progresso de cada programa considera todas as etapas CL do Job associado, inclusive as OPs não listadas na planilha, seguindo o cálculo da Visão de produção com o filtro CL e sem outros filtros aplicados. A porcentagem é a soma das quantidades reportadas dividida pela soma das planejadas, limitada a 100% na exibição; o Job é contado como concluído na máquina quando o total reportado atinge o planejado e este é maior que zero. Cada Job identificado é contado uma vez por máquina, mesmo que apareça em vários programas; pode aparecer em mais de uma máquina.
+
+O painel resume, para cada máquina, a carga dos programas encontrados, a quantidade de programas importados e os Jobs concluídos. Os botões filtram a máquina selecionada e mostram todos os programas importados. Ao clicar em um programa identificado, são exibidas todas as OPs do Job que têm etapa CL, com o mesmo progresso da Visão de produção filtrada por CL; cada OP pode ser expandida para ver suas etapas. OPs do Job não listadas no XLSX também são mostradas, pois compõem o percentual do Job.
+
 Para invalidar todas as sessões ativas, troque `SESSION_SECRET` com `npx wrangler secret put SESSION_SECRET`. Para acesso individual por usuário, será necessário migrar para um provedor de identidade.
 
 ## Desenvolvimento local
@@ -61,6 +67,8 @@ npm run dev
 ```
 
 O Vite abre em `http://127.0.0.1:5173` e usa uma API local de desenvolvimento, sem acessar o Worker ou o D1 do Cloudflare. No ambiente local, a autenticação é desativada e o acesso é administrativo. Os dados publicados ficam em `.local/dataset.json`, pasta ignorada pelo Git.
+
+A planilha de sequenciamento importada localmente é salva separadamente em `.local/laser-schedule.json`. Antes de publicar a funcionalidade no Cloudflare, aplique as migrações com `npm run db:migrate`.
 
 Importe sempre os três relatórios juntos: OPs (`Numero da OP`), Ordens de Produção (`Ord Prod`, `Quant Rep`, `Quant Retrab` e `Quant Refug`) e apontamentos (`Ord Prod`, `Desc Máquina` e `Nome Usuário`). Cada importação substitui o conjunto local anterior. Os apontamentos são associados às etapas pela chave `Ord Prod`; máquina e usuário vêm do terceiro relatório, enquanto quantidade reportada, retrabalho e refugo vêm do relatório de Ordens. Faça uma cópia local dos relatórios se quiser manter os dados após limpar `.local`.
 

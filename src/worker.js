@@ -1,3 +1,5 @@
+import { MAX_LASER_SCHEDULE_BYTES, validLaserSchedule } from './laser-schedule.js';
+
 const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
 const ROWS_PER_CHUNK = 100;
@@ -657,6 +659,46 @@ async function handleApi(request, env) {
 
   if (url.pathname === '/api/session' && request.method === 'GET') {
     return json({ isAdmin: session.role === 'admin' });
+  }
+
+  if (url.pathname === '/api/laser-schedule' && request.method === 'GET') {
+    try {
+      const saved = await env.DB.prepare('SELECT payload, updated_at FROM laser_schedule WHERE singleton = 1').first();
+      return json(saved ? { rows: JSON.parse(saved.payload), updatedAt: saved.updated_at } : { rows: [], updatedAt: null });
+    } catch (error) {
+      console.error('Could not read laser schedule', error);
+      return json({ error: 'Não foi possível carregar o sequenciamento laser.' }, 500);
+    }
+  }
+
+  if (url.pathname === '/api/laser-schedule' && request.method === 'PUT') {
+    if (!isSameOrigin(request)) return json({ error: 'Origem da solicitação não permitida.' }, 403);
+    if (session.role !== 'admin') return json({ error: 'Somente administradores podem importar o sequenciamento.' }, 403);
+    if (Number(request.headers.get('Content-Length') || 0) > MAX_LASER_SCHEDULE_BYTES) {
+      return json({ error: 'O sequenciamento excede 1 MiB.' }, 413);
+    }
+    let rows;
+    try {
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > MAX_LASER_SCHEDULE_BYTES) {
+        return json({ error: 'O sequenciamento excede 1 MiB.' }, 413);
+      }
+      rows = JSON.parse(body);
+    } catch {
+      return json({ error: 'O sequenciamento enviado não é um JSON válido.' }, 400);
+    }
+    if (!validLaserSchedule(rows)) return json({ error: 'O sequenciamento contém dados inválidos.' }, 400);
+    const updatedAt = new Date().toISOString();
+    try {
+      await env.DB.prepare(`
+        INSERT INTO laser_schedule (singleton, payload, updated_at) VALUES (1, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+      `).bind(JSON.stringify(rows), updatedAt).run();
+      return json({ updatedAt }, 201);
+    } catch (error) {
+      console.error('Could not save laser schedule', error);
+      return json({ error: 'Não foi possível salvar o sequenciamento laser.' }, 500);
+    }
   }
 
   if (url.pathname === '/api/data' && request.method === 'GET') {

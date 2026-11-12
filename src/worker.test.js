@@ -38,6 +38,7 @@ class FakeD1 {
   activeDatasetReadPages = 0;
   maxConcurrentDatasetReadPages = 0;
   fakePayloadBytesPerKind = null;
+  laserSchedule = null;
 
   prepare(query) {
     return new FakeStatement(this, query);
@@ -48,7 +49,9 @@ class FakeD1 {
   }
 
   async run(query, values) {
-    if (query.startsWith('DELETE FROM login_attempts WHERE attempted_at <')) {
+    if (query.startsWith('INSERT INTO laser_schedule')) {
+      this.laserSchedule = { payload: values[0], updated_at: values[1] };
+    } else if (query.startsWith('DELETE FROM login_attempts WHERE attempted_at <')) {
       this.attempts = this.attempts.filter((attempt) => attempt.attemptedAt >= values[0]);
     } else if (query.startsWith('INSERT INTO login_attempts')) {
       this.attempts.push({ ipHash: values[0], attemptedAt: values[1] });
@@ -106,6 +109,9 @@ class FakeD1 {
   }
 
   async first(query, values) {
+    if (query.startsWith('SELECT payload, updated_at FROM laser_schedule')) {
+      return this.laserSchedule;
+    }
     if (query.startsWith('SELECT upload_expected_bytes, upload_received_bytes')) {
       const upload = this.uploadState.get(values[0]);
       return upload ? {
@@ -287,6 +293,25 @@ test('viewer login can read shared data but cannot publish', async () => {
     body: { ops: [{ 'Numero da OP': '123' }], ordens: [] },
   });
   assert.equal(publish.status, 403);
+});
+
+test('laser schedule is shared with viewers and writable only by admins', async () => {
+  const bindings = env();
+  const { cookie: admin } = await login(bindings, bindings.ADMIN_PASSWORD);
+  const { cookie: viewer } = await login(bindings, bindings.VIEWER_PASSWORD);
+  const rows = [{ machine: 'Fiber 4', program: 'A', hours: 2.5, sequence: 1, ops: ['123'] }];
+  const empty = await request('/api/laser-schedule', { db: bindings, cookie: viewer });
+  assert.deepEqual(await empty.json(), { rows: [], updatedAt: null });
+  const forbidden = await request('/api/laser-schedule', { db: bindings, cookie: viewer, method: 'PUT', body: rows });
+  assert.equal(forbidden.status, 403);
+  const invalid = await request('/api/laser-schedule', { db: bindings, cookie: admin, method: 'PUT', body: [] });
+  assert.equal(invalid.status, 400);
+  const saved = await request('/api/laser-schedule', { db: bindings, cookie: admin, method: 'PUT', body: rows });
+  assert.equal(saved.status, 201);
+  const result = await request('/api/laser-schedule', { db: bindings, cookie: viewer });
+  const schedule = await result.json();
+  assert.deepEqual(schedule.rows, rows);
+  assert.ok(schedule.updatedAt);
 });
 
 test('admin can publish a dataset that persists for later reads', async () => {

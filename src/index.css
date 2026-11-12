@@ -526,6 +526,16 @@ button {
   font-weight: 650;
 }
 
+.laser-status-complete {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.18);
+}
+
+.laser-status-progress {
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.18);
+}
+
 .status-available,
 .status-delivered { color: #86efac; }
 .status-waiting { color: #fcd34d; }
@@ -752,6 +762,139 @@ button {
 .dataset-updated {
   color: var(--muted);
   font-size: 0.76rem;
+}
+
+.laser-load {
+  margin-bottom: 24px;
+}
+
+.laser-load-description {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 8px 0;
+}
+
+.laser-dashboard {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.laser-dashboard-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.laser-dashboard-card h4 {
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+.laser-dashboard-hours {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.laser-dashboard-hours strong {
+  color: #7dd3fc;
+  font-size: 1.3rem;
+}
+
+.laser-dashboard-hours span,
+.laser-dashboard-counts {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+}
+
+.laser-dashboard-counts {
+  display: flex;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.laser-dashboard-counts strong {
+  color: #86efac;
+}
+
+.laser-load-machines {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.laser-machine-button {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text-soft);
+  padding: 12px;
+  cursor: pointer;
+}
+
+.laser-machine-button-active {
+  border-color: var(--primary);
+  background: rgba(37, 99, 235, 0.25);
+  color: white;
+}
+
+.laser-load-machine {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.laser-machine-heading {
+  margin: 0;
+  padding: 14px;
+}
+
+.laser-machine-empty {
+  padding: 0 14px;
+}
+
+.laser-program-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: #7dd3fc;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.laser-program-chevron-open {
+  transform: rotate(90deg);
+}
+
+.integration-table tbody tr.laser-program-details > td {
+  white-space: normal;
+  padding: 16px;
+}
+
+.laser-program-details p {
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+
+.integration-table tbody tr.laser-program-not-found {
+  background: rgba(185, 28, 28, 0.2);
+}
+
+.integration-table tbody tr.laser-program-not-found td {
+  color: #fca5a5;
 }
 
 .refresh-button {
