@@ -42,6 +42,7 @@ test('local laser schedule survives a server restart and rejects invalid replace
     await rm(scheduleFile, { force: true });
     await rmdir(directory);
   });
+
   const serve = async () => {
     let middleware;
     localApi({ dataFile, scheduleFile }).configureServer({ middlewares: { use(handler) { middleware = handler; } } });
@@ -64,4 +65,39 @@ test('local laser schedule survives a server restart and rejects invalid replace
   const schedule = await response.json();
   assert.deepEqual(schedule.rows, rows);
   assert.ok(schedule.updatedAt);
+});
+
+test('local separation statuses persist across restarts and concurrent updates', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'laser-separation-test-'));
+  const separationFile = path.join(directory, 'separation.json');
+  t.after(async () => {
+    await rm(separationFile, { force: true });
+    await rmdir(directory);
+  });
+  const serve = async () => {
+    let middleware;
+    localApi({
+      dataFile: path.join(directory, 'dataset.json'),
+      scheduleFile: path.join(directory, 'schedule.json'),
+      separationFile,
+    }).configureServer({ middlewares: { use(handler) { middleware = handler; } } });
+    const server = createServer((request, response) => middleware(request, response, () => response.writeHead(404).end()));
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => server.listening ? new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())) : undefined);
+    return { server, url: `http://127.0.0.1:${server.address().port}/api/laser-separation` };
+  };
+  const close = (server) => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  const first = await serve();
+  assert.deepEqual(await (await fetch(first.url)).json(), { rows: [] });
+  const rows = [
+    { machine: 'Fiber 4', program: 'A', status: 'paid' },
+    { machine: 'Fiber 6', program: 'A', status: 'pending' },
+  ];
+  const responses = await Promise.all(rows.map((row) => fetch(first.url, { method: 'PUT', body: JSON.stringify(row) })));
+  assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+  assert.equal((await fetch(first.url, { method: 'PUT', body: '{"machine":"Fiber 4","program":"A","status":"unknown"}' })).status, 400);
+  await close(first.server);
+  const second = await serve();
+  const result = await (await fetch(second.url)).json();
+  assert.deepEqual(result.rows.sort((a, b) => a.machine.localeCompare(b.machine)), rows);
 });

@@ -541,6 +541,18 @@ button {
   background: rgba(234, 88, 12, 0.2);
 }
 
+.laser-separation-select {
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-weight: 650;
+  background-color: #17243b;
+}
+
+.laser-separation-pending { color: #fcd34d; }
+.laser-separation-paid { color: #86efac; }
+
 .status-available,
 .status-delivered { color: #86efac; }
 .status-waiting { color: #fcd34d; }

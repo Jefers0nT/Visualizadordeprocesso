@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MAX_LASER_SCHEDULE_BYTES, validLaserSchedule } from '../src/laser-schedule.js';
+import { separationKey, validSeparationUpdate } from '../src/laser-separation.js';
 
 const MAX_CHUNK_BYTES = 1024 * 1024;
 const ROWS_PER_CHUNK = 100;
 const DATA_FILE = path.resolve('.local', 'dataset.json');
 const SCHEDULE_FILE = path.resolve('.local', 'laser-schedule.json');
+const SEPARATION_FILE = path.resolve('.local', 'laser-separation.json');
 
 const emptyDataset = () => ({ ops: [], ordens: [], apontamentos: [], updatedAt: null });
 const normalizeHeader = (value) =>
@@ -50,9 +52,11 @@ function validProductionReports(rows) {
   return ['desc maquina', 'nome usuario'].every((header) => headers.has(header));
 }
 
-function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE } = {}) {
+function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE, separationFile = SEPARATION_FILE } = {}) {
   let dataset = emptyDataset();
   let schedule = { rows: [], updatedAt: null };
+  let separation = new Map();
+  let separationWrites = Promise.resolve();
   const uploads = new Map();
   const datasetReady = readFile(dataFile, 'utf8')
     .then((contents) => {
@@ -67,6 +71,17 @@ function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE } = {}) {
       if (!validLaserSchedule(schedule.rows) || typeof schedule.updatedAt !== 'string') {
         throw new Error('O sequenciamento local salvo é inválido.');
       }
+    })
+    .catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+  const separationReady = readFile(separationFile, 'utf8')
+    .then((contents) => {
+      const rows = JSON.parse(contents);
+      if (!Array.isArray(rows) || !rows.every(validSeparationUpdate)) {
+        throw new Error('Os status de separação locais são inválidos.');
+      }
+      separation = new Map(rows.map((row) => [separationKey(row.machine, row.program), row]));
     })
     .catch((error) => {
       if (error.code !== 'ENOENT') throw error;
@@ -93,6 +108,32 @@ function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE } = {}) {
             return sendJson(response, { isAdmin: true });
           }
           if (url.pathname === '/api/logout' && request.method === 'POST') {
+            return sendJson(response, { ok: true });
+          }
+          if (url.pathname === '/api/laser-separation' && request.method === 'GET') {
+            await separationReady;
+            await separationWrites;
+            return sendJson(response, { rows: [...separation.values()] });
+          }
+          if (url.pathname === '/api/laser-separation' && request.method === 'PUT') {
+            await separationReady;
+            const update = JSON.parse(await readBody(request, 4096));
+            if (!validSeparationUpdate(update)) {
+              return sendJson(response, { error: 'Status de separação inválido.' }, 400);
+            }
+            const save = separationWrites.then(async () => {
+              const next = new Map(separation);
+              next.set(separationKey(update.machine, update.program), {
+                machine: update.machine, program: update.program, status: update.status,
+              });
+              await mkdir(path.dirname(separationFile), { recursive: true });
+              await writeFile(separationFile, JSON.stringify([...next.values()]));
+              separation = next;
+            });
+            separationWrites = save.catch((error) => {
+              console.error('Could not save local separation status', error);
+            });
+            await save;
             return sendJson(response, { ok: true });
           }
           if (url.pathname === '/api/laser-schedule' && request.method === 'GET') {

@@ -39,6 +39,7 @@ class FakeD1 {
   maxConcurrentDatasetReadPages = 0;
   fakePayloadBytesPerKind = null;
   laserSchedule = null;
+  laserSeparation = new Map();
 
   prepare(query) {
     return new FakeStatement(this, query);
@@ -49,7 +50,11 @@ class FakeD1 {
   }
 
   async run(query, values) {
-    if (query.startsWith('INSERT INTO laser_schedule')) {
+    if (query.startsWith('INSERT INTO laser_separation')) {
+      this.laserSeparation.set(JSON.stringify(values.slice(0, 2)), {
+        machine: values[0], program: values[1], status: values[2],
+      });
+    } else if (query.startsWith('INSERT INTO laser_schedule')) {
       this.laserSchedule = { payload: values[0], updated_at: values[1] };
     } else if (query.startsWith('DELETE FROM login_attempts WHERE attempted_at <')) {
       this.attempts = this.attempts.filter((attempt) => attempt.attemptedAt >= values[0]);
@@ -160,6 +165,9 @@ class FakeD1 {
   }
 
   async all(query, values) {
+    if (query.startsWith('SELECT machine, program, status FROM laser_separation')) {
+      return { results: [...this.laserSeparation.values()] };
+    }
     if (query.startsWith('SELECT kind, COUNT(*) AS chunk_count')) {
       const chunksByKind = ['ops', 'ordens', 'apontamentos'].map((kind) => {
         const chunks = this.chunks.filter((chunk) =>
@@ -312,6 +320,39 @@ test('laser schedule is shared with viewers and writable only by admins', async 
   const schedule = await result.json();
   assert.deepEqual(schedule.rows, rows);
   assert.ok(schedule.updatedAt);
+});
+
+test('separation status is shared, admin-only, and isolated by machine and program', async () => {
+  const bindings = env();
+  const { cookie: admin } = await login(bindings, bindings.ADMIN_PASSWORD);
+  const { cookie: viewer } = await login(bindings, bindings.VIEWER_PASSWORD);
+  const url = '/api/laser-separation';
+  const update = (cookie, body) => request(url, { db: bindings, cookie, method: 'PUT', body });
+  assert.equal((await request(url, { db: bindings })).status, 401);
+  assert.deepEqual(await (await request(url, { db: bindings, cookie: viewer })).json(), { rows: [] });
+  assert.equal((await update(viewer, { machine: 'A', program: 'P', status: 'paid' })).status, 403);
+  for (const body of [
+    { machine: 'A', program: 'P', status: 'other' },
+    { machine: '', program: 'P', status: 'paid' },
+    { machine: 'A', program: '   ', status: 'paid' },
+  ]) {
+    assert.equal((await update(admin, body)).status, 400);
+  }
+  assert.equal((await update(admin, { machine: 'A', program: 'P', status: 'paid' })).status, 200);
+  assert.equal((await update(admin, { machine: 'B', program: 'P', status: 'pending' })).status, 200);
+  assert.equal((await update(admin, { machine: 'A', program: 'Q', status: 'paid' })).status, 200);
+  assert.equal((await update(admin, { machine: 'A', program: 'P', status: 'pending' })).status, 200);
+  assert.equal((await update(admin, { machine: ' A ', program: ' P ', status: 'paid' })).status, 200);
+  const schedule = [{ machine: 'A', program: 'P', hours: 2, sequence: 1, ops: ['123'] }];
+  assert.equal((await request('/api/laser-schedule', { db: bindings, cookie: admin, method: 'PUT', body: schedule })).status, 201);
+  assert.equal((await request('/api/laser-schedule', { db: bindings, cookie: admin, method: 'PUT', body: [{ ...schedule[0], sequence: 2 }] })).status, 201);
+  const result = await (await request(url, { db: bindings, cookie: viewer })).json();
+  assert.deepEqual(result.rows, [
+    { machine: 'A', program: 'P', status: 'pending' },
+    { machine: 'B', program: 'P', status: 'pending' },
+    { machine: 'A', program: 'Q', status: 'paid' },
+    { machine: ' A ', program: ' P ', status: 'paid' },
+  ]);
 });
 
 test('admin can publish a dataset that persists for later reads', async () => {

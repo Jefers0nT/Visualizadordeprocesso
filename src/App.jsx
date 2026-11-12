@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
 import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet } from './laser-schedule.js';
+import { LASER_SEPARATION_PAID, LASER_SEPARATION_PENDING, separationKey } from './laser-separation.js';
 
 const decode = (buf) => {
   try {
@@ -362,7 +363,7 @@ function JobGroup({ job, list, jobComplete, jobEmission }) {
   );
 }
 
-function LaserProgramRow({ program }) {
+function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSeparationChange }) {
   const [isOpen, setIsOpen] = useState(false);
   const status = program.found ? laserProgramStatus(program) : null;
 
@@ -381,6 +382,26 @@ function LaserProgramRow({ program }) {
         </td>
         <td>{program.hours.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</td>
         <td>{program.found ? `${program.reported.toLocaleString('pt-BR')} / ${program.planned.toLocaleString('pt-BR')}` : '—'}</td>
+        <td>
+          {separation === null ? (
+            <span>Indisponível</span>
+          ) : isAdmin ? (
+            <select
+              className={`laser-separation-select ${separation === LASER_SEPARATION_PAID ? 'laser-separation-paid' : 'laser-separation-pending'}`}
+              aria-label={`Separação do programa ${program.program} na máquina ${program.machine}`}
+              value={separation}
+              disabled={savingSeparation}
+              onChange={(event) => onSeparationChange(program, event.target.value)}
+            >
+              <option value={LASER_SEPARATION_PENDING}>Pendente de separação</option>
+              <option value={LASER_SEPARATION_PAID}>Pago</option>
+            </select>
+          ) : (
+            <span className={`integration-status ${separation === LASER_SEPARATION_PAID ? 'laser-separation-paid' : 'laser-separation-pending'}`}>
+              {separation === LASER_SEPARATION_PAID ? 'Pago' : 'Pendente de separação'}
+            </span>
+          )}
+        </td>
         <td>{program.found ? percent(program.reported, program.planned) : '—'}</td>
         <td>
           {program.found ? (
@@ -392,7 +413,7 @@ function LaserProgramRow({ program }) {
       </tr>
       {program.found && isOpen && (
         <tr className="laser-program-details">
-          <td colSpan={6}>
+          <td colSpan={7}>
             <section aria-label={`OPs do programa ${program.program}`}>
               <p>OPs do Job {program.job} · etapa CL</p>
               <div className="job-list">
@@ -428,6 +449,9 @@ export default function App() {
   const [laserSchedule, setLaserSchedule] = useState({ rows: [], updatedAt: null });
   const [scheduleError, setScheduleError] = useState('');
   const [savingSchedule, setSavingSchedule] = useState(false);
+  const [separationStatuses, setSeparationStatuses] = useState(null);
+  const [separationError, setSeparationError] = useState('');
+  const [savingSeparation, setSavingSeparation] = useState(false);
   const fileRef = useRef(null);
   const scheduleFileRef = useRef(null);
   const dirRef = useRef(null);
@@ -454,7 +478,18 @@ export default function App() {
         setLaserSchedule({ rows: [], updatedAt: null });
         setScheduleError(error.message);
       }
-      if (showToast) toast.success('Dados atualizados');
+      try {
+        const result = await fetchApi('/api/laser-separation');
+        setSeparationStatuses(Object.fromEntries(result.rows.map((row) => [
+          separationKey(row.machine, row.program), row.status,
+        ])));
+        setSeparationError('');
+      } catch (error) {
+        if (error.status === 401) throw error;
+        setSeparationStatuses(null);
+        setSeparationError(error.message);
+      }
+      if (showToast) toast.success('Dados de produção atualizados.');
     } catch (error) {
       setAuthChecked(true);
       if (error.status === 401) {
@@ -466,6 +501,8 @@ export default function App() {
         setUpdatedAt('');
         setLaserSchedule({ rows: [], updatedAt: null });
         setScheduleError('');
+        setSeparationStatuses(null);
+        setSeparationError('');
       } else {
         setLoadError(error.message);
       }
@@ -513,6 +550,8 @@ export default function App() {
       setUpdatedAt('');
       setLaserSchedule({ rows: [], updatedAt: null });
       setScheduleError('');
+      setSeparationStatuses(null);
+      setSeparationError('');
       setAuthChecked(true);
     } catch (error) {
       toast.error(error.message);
@@ -648,6 +687,26 @@ export default function App() {
       toast.error(`Não foi possível importar o sequenciamento: ${error.message}`);
     } finally {
       setSavingSchedule(false);
+    }
+  };
+
+  const handleSeparationChange = async (program, status) => {
+    if (!isAdmin || savingSeparation) return;
+    setSavingSeparation(true);
+    try {
+      await fetchApi('/api/laser-separation', {
+        method: 'PUT',
+        body: JSON.stringify({ machine: program.machine, program: program.program, status }),
+      });
+      setSeparationStatuses((current) => ({
+        ...current,
+        [separationKey(program.machine, program.program)]: status,
+      }));
+      toast.success('Status de separação atualizado.');
+    } catch (error) {
+      toast.error(`Não foi possível atualizar a separação: ${error.message}`);
+    } finally {
+      setSavingSeparation(false);
     }
   };
 
@@ -920,7 +979,7 @@ export default function App() {
               type="button"
               className="secondary-button refresh-button"
               onClick={() => loadSharedData({ showToast: true })}
-              disabled={loading || savingSchedule}
+              disabled={loading || savingSchedule || savingSeparation}
             >
               <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
               Atualizar
@@ -955,7 +1014,7 @@ export default function App() {
                   type="button"
                   className="secondary-button refresh-button"
                   onClick={() => loadSharedData({ showToast: true })}
-                  disabled={loading || savingSchedule}
+                  disabled={loading || savingSchedule || savingSeparation}
                 >
                   <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
                   Atualizar
@@ -1010,6 +1069,7 @@ export default function App() {
                     <p className="laser-load-description">Nenhum programa da planilha corresponde às OPs da etapa CL.</p>
                   ) : (
                     <>
+                      {separationError && <p className="laser-load-description" role="alert">{separationError} Use Atualizar para tentar novamente.</p>}
                       <div className="laser-dashboard" aria-label="Resumo das máquinas">
                         {laserLoad.machines.map((machine) => {
                           const counts = laserJobCounts(machine.jobs);
@@ -1062,10 +1122,19 @@ export default function App() {
                         ) : (
                           <div className="integration-table-wrap">
                             <table className="integration-table">
-                              <thead><tr><th>Seq</th><th>Programa</th><th>Carga</th><th>Reportado / planejado</th><th>Progresso CL</th><th>Status</th></tr></thead>
+                              <thead><tr><th>Seq</th><th>Programa</th><th>Carga</th><th>Reportado / planejado</th><th>Separação</th><th>Progresso CL</th><th>Status</th></tr></thead>
                               <tbody>
                                 {activeMachine.programs.map((program, index) => (
-                                  <LaserProgramRow key={`${activeMachine.machine}-${program.sequence}-${index}`} program={program} />
+                                  <LaserProgramRow
+                                    key={`${activeMachine.machine}-${program.sequence}-${index}`}
+                                    program={program}
+                                    isAdmin={isAdmin}
+                                    separation={separationStatuses === null
+                                      ? null
+                                      : separationStatuses[separationKey(program.machine, program.program)] || LASER_SEPARATION_PENDING}
+                                    savingSeparation={savingSeparation || loading}
+                                    onSeparationChange={handleSeparationChange}
+                                  />
                                 ))}
                               </tbody>
                             </table>

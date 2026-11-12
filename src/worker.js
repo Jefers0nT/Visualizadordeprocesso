@@ -1,4 +1,5 @@
 import { MAX_LASER_SCHEDULE_BYTES, validLaserSchedule } from './laser-schedule.js';
+import { validSeparationUpdate } from './laser-separation.js';
 
 const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
@@ -659,6 +660,45 @@ async function handleApi(request, env) {
 
   if (url.pathname === '/api/session' && request.method === 'GET') {
     return json({ isAdmin: session.role === 'admin' });
+  }
+
+  if (url.pathname === '/api/laser-separation' && request.method === 'GET') {
+    try {
+      const result = await env.DB.prepare('SELECT machine, program, status FROM laser_separation').all();
+      return json({ rows: result.results });
+    } catch (error) {
+      console.error('Could not read laser separation statuses', error);
+      return json({ error: 'Não foi possível carregar os status de separação.' }, 500);
+    }
+  }
+
+  if (url.pathname === '/api/laser-separation' && request.method === 'PUT') {
+    if (!isSameOrigin(request)) return json({ error: 'Origem da solicitação não permitida.' }, 403);
+    if (session.role !== 'admin') return json({ error: 'Somente administradores podem alterar a separação.' }, 403);
+    if (Number(request.headers.get('Content-Length') || 0) > 4096) {
+      return json({ error: 'Solicitação de separação excede o limite.' }, 413);
+    }
+    let update;
+    try {
+      const body = await request.text();
+      if (new TextEncoder().encode(body).byteLength > 4096) {
+        return json({ error: 'Solicitação de separação excede o limite.' }, 413);
+      }
+      update = JSON.parse(body);
+    } catch {
+      return json({ error: 'Solicitação de separação inválida.' }, 400);
+    }
+    if (!validSeparationUpdate(update)) return json({ error: 'Status de separação inválido.' }, 400);
+    try {
+      await env.DB.prepare(`
+        INSERT INTO laser_separation (machine, program, status) VALUES (?, ?, ?)
+        ON CONFLICT(machine, program) DO UPDATE SET status = excluded.status
+      `).bind(update.machine, update.program, update.status).run();
+      return json({ ok: true });
+    } catch (error) {
+      console.error('Could not save laser separation status', error);
+      return json({ error: 'Não foi possível salvar o status de separação.' }, 500);
+    }
   }
 
   if (url.pathname === '/api/laser-schedule' && request.method === 'GET') {

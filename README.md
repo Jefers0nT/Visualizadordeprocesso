@@ -58,6 +58,8 @@ O painel resume, para cada máquina, a carga dos programas encontrados, a quanti
 
 O painel também estima as horas cortadas e restantes por máquina. Para cada programa identificado, divide-se sua carga igualmente entre todas as OPs CL do Job e aplica-se a cada parcela a proporção reportada sobre a planejada daquela OP, limitada a 0–100%. Programas não encontrados ou ambíguos e parcelas de OPs sem quantidade planejada positiva são consideradas integralmente pendentes. A carga total usada nessa estimativa inclui esses programas, diferentemente da carga de programas encontrados. É uma estimativa, não uma medição do tempo real de corte.
 
+Na coluna **Separação**, somente administradores podem marcar cada programa de uma máquina como **Pago** ou **Pendente de separação**; todos os usuários autenticados podem consultar o status. O padrão é pendente e o status é compartilhado por nome exato do programa e da máquina, inclusive entre linhas duplicadas. Alterar a sequência ou reimportar relatórios mantém o status; renomear o programa ou a máquina cria uma associação diferente. O status de separação é independente do progresso de corte.
+
 Para invalidar todas as sessões ativas, troque `SESSION_SECRET` com `npx wrangler secret put SESSION_SECRET`. Para acesso individual por usuário, será necessário migrar para um provedor de identidade.
 
 ## Desenvolvimento local
@@ -70,7 +72,7 @@ npm run dev
 
 O Vite abre em `http://127.0.0.1:5173` e usa uma API local de desenvolvimento, sem acessar o Worker ou o D1 do Cloudflare. No ambiente local, a autenticação é desativada e o acesso é administrativo. Os dados publicados ficam em `.local/dataset.json`, pasta ignorada pelo Git.
 
-A planilha de sequenciamento importada localmente é salva separadamente em `.local/laser-schedule.json`. Antes de publicar a funcionalidade no Cloudflare, aplique as migrações com `npm run db:migrate`.
+A planilha de sequenciamento importada localmente é salva separadamente em `.local/laser-schedule.json`; os status de separação ficam em `.local/laser-separation.json`. Antes de publicar a funcionalidade no Cloudflare, aplique as migrações com `npm run db:migrate`.
 
 Importe sempre os três relatórios juntos: OPs (`Numero da OP`), Ordens de Produção (`Ord Prod`, `Quant Rep`, `Quant Retrab` e `Quant Refug`) e apontamentos (`Ord Prod`, `Desc Máquina` e `Nome Usuário`). Cada importação substitui o conjunto local anterior. Os apontamentos são associados às etapas pela chave `Ord Prod`; máquina e usuário vêm do terceiro relatório, enquanto quantidade reportada, retrabalho e refugo vêm do relatório de Ordens. Faça uma cópia local dos relatórios se quiser manter os dados após limpar `.local`.
 
