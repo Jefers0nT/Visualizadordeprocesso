@@ -552,6 +552,9 @@ button {
 
 .laser-separation-pending { color: #fcd34d; }
 .laser-separation-paid { color: #86efac; }
+.laser-separation-reschedule { color: #fdba74; }
+.laser-separation-missing-material { color: #fca5a5; }
+.laser-separation-awaiting-pcp { color: #93c5fd; }
 
 .status-available,
 .status-delivered { color: #86efac; }

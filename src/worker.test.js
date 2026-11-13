@@ -343,6 +343,10 @@ test('separation status is shared, admin-only, and isolated by machine and progr
   assert.equal((await update(admin, { machine: 'A', program: 'Q', status: 'paid' })).status, 200);
   assert.equal((await update(admin, { machine: 'A', program: 'P', status: 'pending' })).status, 200);
   assert.equal((await update(admin, { machine: ' A ', program: ' P ', status: 'paid' })).status, 200);
+  for (const status of ['reschedule', 'missing_material', 'awaiting_pcp']) {
+    assert.equal((await update(viewer, { machine: 'C', program: status, status })).status, 403);
+    assert.equal((await update(admin, { machine: 'C', program: status, status })).status, 200);
+  }
   const schedule = [{ machine: 'A', program: 'P', hours: 2, sequence: 1, ops: ['123'] }];
   assert.equal((await request('/api/laser-schedule', { db: bindings, cookie: admin, method: 'PUT', body: schedule })).status, 201);
   assert.equal((await request('/api/laser-schedule', { db: bindings, cookie: admin, method: 'PUT', body: [{ ...schedule[0], sequence: 2 }] })).status, 201);
@@ -352,6 +356,9 @@ test('separation status is shared, admin-only, and isolated by machine and progr
     { machine: 'B', program: 'P', status: 'pending' },
     { machine: 'A', program: 'Q', status: 'paid' },
     { machine: ' A ', program: ' P ', status: 'paid' },
+    { machine: 'C', program: 'reschedule', status: 'reschedule' },
+    { machine: 'C', program: 'missing_material', status: 'missing_material' },
+    { machine: 'C', program: 'awaiting_pcp', status: 'awaiting_pcp' },
   ]);
 });
 

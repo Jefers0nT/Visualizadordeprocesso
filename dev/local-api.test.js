@@ -92,12 +92,16 @@ test('local separation statuses persist across restarts and concurrent updates',
   const rows = [
     { machine: 'Fiber 4', program: 'A', status: 'paid' },
     { machine: 'Fiber 6', program: 'A', status: 'pending' },
+    { machine: 'Yawei F', program: 'A', status: 'reschedule' },
+    { machine: 'Yawei X', program: 'A', status: 'missing_material' },
+    { machine: 'Yawei X', program: 'B', status: 'awaiting_pcp' },
   ];
   const responses = await Promise.all(rows.map((row) => fetch(first.url, { method: 'PUT', body: JSON.stringify(row) })));
-  assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+  assert.deepEqual(responses.map((response) => response.status), rows.map(() => 200));
   assert.equal((await fetch(first.url, { method: 'PUT', body: '{"machine":"Fiber 4","program":"A","status":"unknown"}' })).status, 400);
   await close(first.server);
   const second = await serve();
   const result = await (await fetch(second.url)).json();
-  assert.deepEqual(result.rows.sort((a, b) => a.machine.localeCompare(b.machine)), rows);
+  const sortRows = (items) => items.sort((a, b) => a.machine.localeCompare(b.machine) || a.program.localeCompare(b.program));
+  assert.deepEqual(sortRows(result.rows), sortRows(rows));
 });

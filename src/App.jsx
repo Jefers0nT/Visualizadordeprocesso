@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
 import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
-import { LASER_SEPARATION_PAID, LASER_SEPARATION_PENDING, separationKey } from './laser-separation.js';
+import { LASER_SEPARATION_OPTIONS, LASER_SEPARATION_PENDING, separationKey } from './laser-separation.js';
 import { getField, normalizeHeader, projectDataset } from './dataset-projection.js';
 
 const decode = (buf) => {
@@ -360,6 +360,7 @@ function JobGroup({ job, list, jobComplete, jobEmission }) {
 function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSeparationChange }) {
   const [isOpen, setIsOpen] = useState(false);
   const status = program.found ? laserProgramStatus(program) : null;
+  const separationOption = LASER_SEPARATION_OPTIONS.find((option) => option.value === separation);
 
   return (
     <>
@@ -377,22 +378,23 @@ function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSep
         <td>{program.hours.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</td>
         <td>{program.found ? `${program.reported.toLocaleString('pt-BR')} / ${program.planned.toLocaleString('pt-BR')}` : '—'}</td>
         <td>
-          {separation === null ? (
+          {separation === null || !separationOption ? (
             <span>Indisponível</span>
           ) : isAdmin ? (
             <select
-              className={`laser-separation-select ${separation === LASER_SEPARATION_PAID ? 'laser-separation-paid' : 'laser-separation-pending'}`}
+              className={`laser-separation-select ${separationOption.className}`}
               aria-label={`Separação do programa ${program.program} na máquina ${program.machine}`}
               value={separation}
               disabled={savingSeparation}
               onChange={(event) => onSeparationChange(program, event.target.value)}
             >
-              <option value={LASER_SEPARATION_PENDING}>Pendente de separação</option>
-              <option value={LASER_SEPARATION_PAID}>Pago</option>
+              {LASER_SEPARATION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           ) : (
-            <span className={`integration-status ${separation === LASER_SEPARATION_PAID ? 'laser-separation-paid' : 'laser-separation-pending'}`}>
-              {separation === LASER_SEPARATION_PAID ? 'Pago' : 'Pendente de separação'}
+            <span className={`integration-status ${separationOption.className}`}>
+              {separationOption.label}
             </span>
           )}
         </td>
