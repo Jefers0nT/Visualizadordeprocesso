@@ -3,6 +3,7 @@ import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw }
 import { toast, Toaster } from 'sonner';
 import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
 import { LASER_SEPARATION_PAID, LASER_SEPARATION_PENDING, separationKey } from './laser-separation.js';
+import { getField, normalizeHeader, projectDataset } from './dataset-projection.js';
 
 const decode = (buf) => {
   try {
@@ -93,13 +94,6 @@ function createUploadChunks(rows) {
   }
   return chunks;
 }
-const normalizeHeader = (value) =>
-  String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
-const getField = (row, header) => {
-  const normalizedHeader = normalizeHeader(header);
-  const key = Object.keys(row).find((candidate) => normalizeHeader(candidate) === normalizedHeader);
-  return key ? row[key] : '';
-};
 const percent = (reported, total) =>
   `${Number((total > 0 ? Math.min((reported / total) * 100, 100) : 0).toFixed(1))}%`;
 const uniqueText = (values) => [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))].join(', ');
@@ -465,30 +459,36 @@ export default function App() {
       setAuthenticated(true);
       setAuthChecked(true);
       setIsAdmin(session.isAdmin);
-      const dataset = await fetchApi('/api/data');
+      const datasetRequest = fetchApi('/api/data');
+      const results = Promise.allSettled([
+        datasetRequest,
+        fetchApi('/api/laser-schedule'),
+        fetchApi('/api/laser-separation'),
+      ]);
+      const dataset = await datasetRequest;
       setOps(dataset.ops);
       setOrdens(dataset.ordens);
       setApontamentos(dataset.apontamentos || []);
       setUpdatedAt(dataset.updatedAt || '');
-      try {
-        const schedule = await fetchApi('/api/laser-schedule');
-        setLaserSchedule(schedule);
-        setScheduleError('');
-      } catch (error) {
-        if (error.status === 401) throw error;
-        setLaserSchedule({ rows: [], updatedAt: null });
-        setScheduleError(error.message);
+      const [, scheduleResult, separationResult] = await results;
+      for (const result of [scheduleResult, separationResult]) {
+        if (result.status === 'rejected' && result.reason.status === 401) throw result.reason;
       }
-      try {
-        const result = await fetchApi('/api/laser-separation');
-        setSeparationStatuses(Object.fromEntries(result.rows.map((row) => [
+      if (scheduleResult.status === 'fulfilled') {
+        setLaserSchedule(scheduleResult.value);
+        setScheduleError('');
+      } else {
+        setLaserSchedule({ rows: [], updatedAt: null });
+        setScheduleError(scheduleResult.reason.message);
+      }
+      if (separationResult.status === 'fulfilled') {
+        setSeparationStatuses(Object.fromEntries(separationResult.value.rows.map((row) => [
           separationKey(row.machine, row.program), row.status,
         ])));
         setSeparationError('');
-      } catch (error) {
-        if (error.status === 401) throw error;
+      } else {
         setSeparationStatuses(null);
-        setSeparationError(error.message);
+        setSeparationError(separationResult.reason.message);
       }
       if (showToast) toast.success('Dados de produção atualizados.');
     } catch (error) {
@@ -603,9 +603,10 @@ export default function App() {
         return;
       }
 
-      const nextOps = allOps;
-      const nextOrdens = allOrdens;
-      const nextApontamentos = allApontamentos;
+      const projected = projectDataset({ ops: allOps, ordens: allOrdens, apontamentos: allApontamentos });
+      const nextOps = projected.ops;
+      const nextOrdens = projected.ordens;
+      const nextApontamentos = projected.apontamentos;
       const chunks = {
         ops: createUploadChunks(nextOps),
         ordens: createUploadChunks(nextOrdens),

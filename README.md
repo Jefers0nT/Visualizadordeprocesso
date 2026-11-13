@@ -46,7 +46,7 @@ O acesso é compartilhado, sem contas individuais ou histórico por usuário. O 
 
    O nome configurado em `wrangler.jsonc` é `visualizadordeprocesso`, correspondente ao Worker do endereço `workers.dev` informado.
 
-   Os relatórios são enviados em blocos de até 1 MiB, sem um limite fixo de 90 MiB para o conjunto. Permanecem os limites de 100.000 linhas por tipo de relatório e os limites de armazenamento e recursos do Cloudflare e do navegador.
+   Os relatórios são enviados em blocos de até 1 MiB, sem um limite fixo de 90 MiB para o conjunto. Antes do envio, os relatórios de OPs e Ordens são reduzidos às colunas utilizadas pelo painel. O relatório de apontamentos é preservado integralmente, inclusive todas as linhas e colunas. A tela lista os nomes distintos dos responsáveis por cada ordem; o total reportado vem do relatório de Ordens. Os arquivos CSV completos continuam sendo lidos no navegador durante a importação. Permanecem os limites de 100.000 linhas por tipo de relatório e os limites de armazenamento e recursos do Cloudflare e do navegador. Para aproveitar a redução com um conjunto publicado anteriormente, o administrador precisa importar novamente os três relatórios; essa atualização não altera o sequenciamento nem os status de separação.
 
 5. Compartilhe a senha de consulta com os usuários. Para publicar ou atualizar dados, entre com a senha de administrador e envie juntos os três CSVs: OPs, Ordens de Produção e Apontamentos. Cada publicação substitui o conjunto anterior por completo; não é possível atualizar somente alguns relatórios. A tela mostra a data da última publicação. Um Job só aparece como **Finalizado** quando todas as suas etapas tiverem quantidade reportada igual ou superior à quantidade planejada.
 
