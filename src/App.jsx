@@ -3,7 +3,7 @@ import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw }
 import { toast, Toaster } from 'sonner';
 import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
 import { LASER_SEPARATION_OPTIONS, LASER_SEPARATION_PENDING, separationKey } from './laser-separation.js';
-import { getField, normalizeHeader, projectDataset } from './dataset-projection.js';
+import { getField, normalizeHeader } from './dataset-projection.js';
 
 const decode = (buf) => {
   try {
@@ -461,7 +461,7 @@ export default function App() {
       setAuthenticated(true);
       setAuthChecked(true);
       setIsAdmin(session.isAdmin);
-      const datasetRequest = fetchApi('/api/data');
+      const datasetRequest = fetchApi(session.isAdmin ? '/api/data' : '/api/data?view=compact');
       const results = Promise.allSettled([
         datasetRequest,
         fetchApi('/api/laser-schedule'),
@@ -605,10 +605,9 @@ export default function App() {
         return;
       }
 
-      const projected = projectDataset({ ops: allOps, ordens: allOrdens, apontamentos: allApontamentos });
-      const nextOps = projected.ops;
-      const nextOrdens = projected.ordens;
-      const nextApontamentos = projected.apontamentos;
+      const nextOps = allOps;
+      const nextOrdens = allOrdens;
+      const nextApontamentos = allApontamentos;
       const chunks = {
         ops: createUploadChunks(nextOps),
         ordens: createUploadChunks(nextOrdens),

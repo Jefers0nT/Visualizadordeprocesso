@@ -1,5 +1,6 @@
 import { MAX_LASER_SCHEDULE_BYTES, validLaserSchedule } from './laser-schedule.js';
 import { validSeparationUpdate } from './laser-separation.js';
+import { projectViewRows } from './dataset-projection.js';
 
 const MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024;
 const MAX_ROWS_PER_KIND = 100_000;
@@ -195,18 +196,33 @@ function validateUploadChunk(rows, kind, chunkIndex) {
   return validateProductionReportRows(rows);
 }
 
-async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
+async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes, compact = false) {
   const encoder = new TextEncoder();
   yield encoder.encode('{"ops":[');
 
   const kinds = ['ops', 'ordens', 'apontamentos'];
+  let table = 'dataset_chunks';
+  let projectOnRead = false;
+  if (compact) {
+    const count = await db.prepare('SELECT COUNT(*) AS chunk_count FROM dataset_view_chunks WHERE snapshot_id = ?')
+      .bind(snapshotId).first();
+    if (count.chunk_count) {
+      table = 'dataset_view_chunks';
+      expectedBytes = 0;
+    } else {
+      projectOnRead = true;
+    }
+  }
+  const contents = (chunk, kind) => projectOnRead
+    ? JSON.stringify(projectViewRows(JSON.parse(chunk.payload), kind)).slice(1, -1)
+    : chunk.payload.slice(1, -1);
   let canReadAllChunks = expectedBytes > 0 && expectedBytes <= MAX_SINGLE_READ_BYTES;
   let chunkCounts = new Map();
   if (!canReadAllChunks) {
     const summary = await db
       .prepare(`
         SELECT kind, COUNT(*) AS chunk_count, SUM(length(CAST(payload AS BLOB))) AS payload_bytes
-        FROM dataset_chunks WHERE snapshot_id = ? GROUP BY kind
+        FROM ${table} WHERE snapshot_id = ? GROUP BY kind
       `)
       .bind(snapshotId)
       .all();
@@ -221,7 +237,7 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
     const chunksByKind = await Promise.all(kinds.map(async (kind) => {
       const result = await db
         .prepare(`
-          SELECT chunk_index, payload FROM dataset_chunks
+          SELECT chunk_index, payload FROM ${table}
           WHERE snapshot_id = ? AND kind = ?
           ORDER BY chunk_index LIMIT ?
         `)
@@ -230,10 +246,10 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
       return [kind, result.results];
     }));
 
-    for (const [index, [, chunks]] of chunksByKind.entries()) {
+    for (const [index, [kind, chunks]] of chunksByKind.entries()) {
       let hasRows = false;
       for (const chunk of chunks) {
-        const rows = chunk.payload.slice(1, -1);
+        const rows = contents(chunk, kind);
         if (rows) {
           yield encoder.encode(`${hasRows ? ',' : ''}${rows}`);
           hasRows = true;
@@ -260,7 +276,7 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
           const pageStart = nextChunkIndex + pageIndex * READ_CHUNKS_PER_QUERY;
           return db
             .prepare(`
-              SELECT chunk_index, payload FROM dataset_chunks
+              SELECT chunk_index, payload FROM ${table}
               WHERE snapshot_id = ? AND kind = ? AND chunk_index >= ? AND chunk_index < ?
               ORDER BY chunk_index LIMIT ?
             `)
@@ -282,7 +298,7 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
         }
 
         for (const chunk of page.results) {
-          const rows = chunk.payload.slice(1, -1);
+          const rows = contents(chunk, kind);
           if (rows) {
             yield encoder.encode(`${hasRows ? ',' : ''}${rows}`);
             hasRows = true;
@@ -304,7 +320,7 @@ async function* readDatasetChunks(db, snapshotId, updatedAt, expectedBytes) {
   }
 }
 
-async function readDataset(db) {
+async function readDataset(db, compact = false) {
   const active = await db
     .prepare('SELECT snapshot_id FROM active_dataset WHERE singleton = 1')
     .first();
@@ -321,6 +337,7 @@ async function readDataset(db) {
     active.snapshot_id,
     snapshot.created_at,
     snapshot.upload_expected_bytes,
+    compact,
   );
   const body = new ReadableStream({
     async pull(controller) {
@@ -439,6 +456,10 @@ async function uploadDatasetChunk(db, uploadId, kind, chunkIndex, body, rows) {
         VALUES (?, ?, ?, ?)
       `).bind(uploadId, kind, chunkIndex, body),
       db.prepare(`
+        INSERT INTO dataset_view_chunks (snapshot_id, kind, chunk_index, payload)
+        VALUES (?, ?, ?, ?)
+      `).bind(uploadId, kind, chunkIndex, JSON.stringify(projectViewRows(rows, kind))),
+      db.prepare(`
         UPDATE dataset_snapshots
         SET upload_received_bytes = upload_received_bytes + ?
         WHERE snapshot_id = ?
@@ -521,6 +542,15 @@ async function completeDatasetUpload(db, payload) {
     ) {
       return { error: 'Faltam blocos ou linhas no envio.', status: 400 };
     }
+    const view = await db.prepare(`
+      SELECT COUNT(*) AS chunk_count, MAX(chunk_index) AS max_chunk_index,
+        SUM(json_array_length(payload)) AS row_count
+      FROM dataset_view_chunks WHERE snapshot_id = ? AND kind = ?
+    `).bind(uploadId, kind).first();
+    if (view.chunk_count !== expectedChunks || view.max_chunk_index !== expectedChunks - 1
+      || (view.row_count || 0) !== expectedRows) {
+      return { error: 'Faltam blocos na versão de consulta.', status: 400 };
+    }
     totalRows += expectedRows;
     totalBytes += actual.byte_count || 0;
   }
@@ -563,12 +593,15 @@ async function publishDataset(db, rowsByKind) {
       ...createChunks(snapshotId, 'apontamentos', rowsByKind.apontamentos || []),
     ];
 
-    for (let offset = 0; offset < chunks.length; offset += STATEMENTS_PER_BATCH) {
-      const batch = chunks.slice(offset, offset + STATEMENTS_PER_BATCH).map((chunk) =>
-        db.prepare(
-          'INSERT INTO dataset_chunks (snapshot_id, kind, chunk_index, payload) VALUES (?, ?, ?, ?)',
-        ).bind(chunk.snapshotId, chunk.kind, chunk.chunkIndex, chunk.payload),
-      );
+    const chunksPerBatch = Math.floor(STATEMENTS_PER_BATCH / 2);
+    for (let offset = 0; offset < chunks.length; offset += chunksPerBatch) {
+      const batch = chunks.slice(offset, offset + chunksPerBatch).flatMap((chunk) => [
+        db.prepare('INSERT INTO dataset_chunks (snapshot_id, kind, chunk_index, payload) VALUES (?, ?, ?, ?)')
+          .bind(chunk.snapshotId, chunk.kind, chunk.chunkIndex, chunk.payload),
+        db.prepare('INSERT INTO dataset_view_chunks (snapshot_id, kind, chunk_index, payload) VALUES (?, ?, ?, ?)')
+          .bind(chunk.snapshotId, chunk.kind, chunk.chunkIndex,
+            JSON.stringify(projectViewRows(JSON.parse(chunk.payload), chunk.kind))),
+      ]);
       await db.batch(batch);
     }
 
@@ -743,7 +776,7 @@ async function handleApi(request, env) {
 
   if (url.pathname === '/api/data' && request.method === 'GET') {
     try {
-      return await readDataset(env.DB);
+      return await readDataset(env.DB, url.searchParams.get('view') === 'compact');
     } catch (error) {
       console.error('Could not read the shared dataset', error);
       return json({ error: 'Não foi possível carregar os Jobs publicados.' }, 500);

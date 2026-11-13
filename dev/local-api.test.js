@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, rm, rmdir } from 'node:fs/promises';
+import { mkdtemp, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -32,6 +32,38 @@ test('local upload accepts more than 90 MiB and rejects invalid sizes', async (t
     const invalid = await start(expectedBytes);
     assert.equal(invalid.status, 400);
   }
+});
+
+test('local compact view preserves full stored reports and all names', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'laser-view-test-'));
+  const dataFile = path.join(directory, 'dataset.json');
+  t.after(async () => {
+    await rm(dataFile, { force: true });
+    await rmdir(directory);
+  });
+  const dataset = {
+    ops: [{ 'Numero da OP': '1', extra: 'x' }],
+    ordens: [{ 'Ord Prod': '10', extra: 'x' }],
+    apontamentos: [
+      { 'Ord Prod': '10', 'Desc Máquina': 'A', 'Nome Usuário': 'B', Horário: '8' },
+      { 'Ord Prod': '10', 'Desc Máquina': 'A', 'Nome Usuário': 'C', Horário: '9' },
+    ],
+    updatedAt: '2026-01-01',
+  };
+  await writeFile(dataFile, JSON.stringify(dataset));
+  let middleware;
+  localApi({ dataFile, scheduleFile: path.join(directory, 'schedule.json'),
+    separationFile: path.join(directory, 'separation.json') })
+    .configureServer({ middlewares: { use(handler) { middleware = handler; } } });
+  const server = createServer((request, response) => middleware(request, response, () => response.writeHead(404).end()));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const url = `http://127.0.0.1:${server.address().port}/api/data`;
+  assert.deepEqual(await (await fetch(url)).json(), dataset);
+  const compact = await (await fetch(`${url}?view=compact`)).json();
+  assert.deepEqual(compact.apontamentos.map((row) => row['Nome Usuário']), ['B', 'C']);
+  assert.ok(compact.apontamentos.every((row) => !('Horário' in row)));
+  assert.equal(compact.updatedAt, dataset.updatedAt);
 });
 
 test('local laser schedule survives a server restart and rejects invalid replacements', async (t) => {

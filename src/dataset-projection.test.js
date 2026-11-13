@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getField, projectDataset } from './dataset-projection.js';
+import { getField, projectDataset, projectViewDataset } from './dataset-projection.js';
 
 test('resolves accented and duplicate normalized headers in their original order', () => {
   assert.equal(getField({ 'Nome Usuario': 'primeiro', 'Nome Usuário': 'segundo' }, 'Nome Usuário'), 'primeiro');
@@ -40,4 +40,10 @@ test('preserves every report including repeated users, quantities and timestamps
   assert.equal(result.apontamentos.length, 4);
   assert.deepEqual(result.apontamentos, apontamentos);
   assert.deepEqual([...new Set(result.apontamentos.map((row) => getField(row, 'Nome Usuário')))], ['B', 'C']);
+  const view = projectViewDataset({ ...result, updatedAt: '2026-01-01' });
+  assert.equal(view.apontamentos.length, 4);
+  assert.deepEqual(view.apontamentos.map((row) => row['Nome Usuário']), ['B', 'B', 'C', 'C']);
+  assert.ok(view.apontamentos.every((row) => !('Horário' in row) && !('Quantidade' in row)));
+  assert.equal(view.updatedAt, '2026-01-01');
+  assert.deepEqual(result.apontamentos, apontamentos);
 });

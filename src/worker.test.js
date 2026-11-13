@@ -33,6 +33,7 @@ class FakeD1 {
   snapshotSizes = new Map();
   uploadState = new Map();
   chunks = [];
+  viewChunks = [];
   activeSnapshotId = null;
   datasetReadPages = 0;
   activeDatasetReadPages = 0;
@@ -81,11 +82,12 @@ class FakeD1 {
       if (values.length > 2) {
         this.uploadState.set(values[0], { expectedBytes: values[2], receivedBytes: values[3] ?? 0 });
       }
-    } else if (query.startsWith('INSERT INTO dataset_chunks')) {
-      if (this.chunks.some((chunk) =>
+    } else if (query.startsWith('INSERT INTO dataset_chunks') || query.startsWith('INSERT INTO dataset_view_chunks')) {
+      const target = query.startsWith('INSERT INTO dataset_view_chunks') ? this.viewChunks : this.chunks;
+      if (target.some((chunk) =>
         chunk.snapshotId === values[0] && chunk.kind === values[1] && chunk.chunkIndex === values[2],
       )) throw new Error('Duplicate dataset chunk');
-      this.chunks.push({
+      target.push({
         snapshotId: values[0],
         kind: values[1],
         chunkIndex: values[2],
@@ -101,12 +103,14 @@ class FakeD1 {
     } else if (query.startsWith('DELETE FROM dataset_snapshots WHERE snapshot_id <>')) {
       this.snapshots = new Map([...this.snapshots].filter(([id]) => id === values[0]));
       this.snapshotSizes = new Map([...this.snapshotSizes].filter(([id]) => id === values[0]));
+      this.viewChunks = this.viewChunks.filter((chunk) => chunk.snapshotId === values[0]);
     } else if (query.startsWith('DELETE FROM dataset_chunks WHERE snapshot_id =')) {
       this.chunks = this.chunks.filter((chunk) => chunk.snapshotId !== values[0]);
     } else if (query.startsWith('DELETE FROM dataset_snapshots WHERE snapshot_id =')) {
       this.snapshots.delete(values[0]);
       this.snapshotSizes.delete(values[0]);
       this.uploadState.delete(values[0]);
+      this.viewChunks = this.viewChunks.filter((chunk) => chunk.snapshotId !== values[0]);
     } else {
       throw new Error(`Unsupported fake D1 statement: ${query}`);
     }
@@ -133,8 +137,12 @@ class FakeD1 {
         upload_received_bytes: upload.receivedBytes,
       } : null;
     }
+    if (query.startsWith('SELECT COUNT(*) AS chunk_count FROM dataset_view_chunks')) {
+      return { chunk_count: this.viewChunks.filter((chunk) => chunk.snapshotId === values[0]).length };
+    }
     if (query.startsWith('SELECT COUNT(*) AS chunk_count')) {
-      const chunks = this.chunks.filter((chunk) =>
+      const source = query.includes('FROM dataset_view_chunks') ? this.viewChunks : this.chunks;
+      const chunks = source.filter((chunk) =>
         chunk.snapshotId === values[0] && chunk.kind === values[1],
       );
       return {
@@ -169,8 +177,9 @@ class FakeD1 {
       return { results: [...this.laserSeparation.values()] };
     }
     if (query.startsWith('SELECT kind, COUNT(*) AS chunk_count')) {
+      const source = query.includes('FROM dataset_view_chunks') ? this.viewChunks : this.chunks;
       const chunksByKind = ['ops', 'ordens', 'apontamentos'].map((kind) => {
-        const chunks = this.chunks.filter((chunk) =>
+        const chunks = source.filter((chunk) =>
           chunk.snapshotId === values[0] && chunk.kind === kind,
         );
         const actualBytes = chunks.reduce((sum, chunk) => sum + Buffer.byteLength(chunk.payload), 0);
@@ -183,7 +192,8 @@ class FakeD1 {
       return { results: chunksByKind.filter((row) => row.chunk_count > 0) };
     }
 
-    if (query.startsWith('SELECT chunk_index, payload FROM dataset_chunks')) {
+    if (query.startsWith('SELECT chunk_index, payload FROM dataset_chunks')
+      || query.startsWith('SELECT chunk_index, payload FROM dataset_view_chunks')) {
       assert.match(query, /LIMIT \?/);
       this.datasetReadPages += 1;
       this.activeDatasetReadPages += 1;
@@ -193,7 +203,8 @@ class FakeD1 {
       );
       try {
         await Promise.resolve();
-        const results = this.chunks
+        const source = query.includes('FROM dataset_view_chunks') ? this.viewChunks : this.chunks;
+        const results = source
           .filter((chunk) =>
             chunk.snapshotId === values[0]
             && chunk.kind === values[1]
@@ -301,6 +312,66 @@ test('viewer login can read shared data but cannot publish', async () => {
     body: { ops: [{ 'Numero da OP': '123' }], ordens: [] },
   });
   assert.equal(publish.status, 403);
+});
+
+test('compact viewer data preserves all report rows while full data remains intact', async () => {
+  const bindings = env();
+  const { cookie: admin } = await login(bindings, bindings.ADMIN_PASSWORD);
+  const { cookie: viewer } = await login(bindings, bindings.VIEWER_PASSWORD);
+  const ops = [{ 'Numero da OP': '1', 'Job de Corte': 'JOB', extra: 'large' }];
+  const ordens = [{ 'Ord Prod': '10', 'DT Emissão': '01/01/2026', extra: 'large' }];
+  const apontamentos = [
+    { 'Ord Prod': '10', 'Desc Máquina': 'Laser', 'Nome Usuário': 'A', Horário: '08:00' },
+    { 'Ord Prod': '10', 'Desc Máquina': 'Laser', 'Nome Usuário': 'B', Horário: '09:00' },
+    { 'Ord Prod': '10', 'Desc Máquina': 'Laser', 'Nome Usuário': 'B', Horário: '10:00' },
+  ];
+  assert.equal((await stagedUpload(bindings, admin, ops, ordens, { apontamentos })).complete.status, 201);
+  const raw = await (await request('/api/data', { db: bindings, cookie: admin })).json();
+  const compact = await (await request('/api/data?view=compact', { db: bindings, cookie: viewer })).json();
+  assert.deepEqual(raw.ops, ops);
+  assert.deepEqual(raw.ordens, ordens);
+  assert.deepEqual(raw.apontamentos, apontamentos);
+  assert.deepEqual(compact.ops, [{ 'Numero da OP': '1', 'Job de Corte': 'JOB' }]);
+  assert.deepEqual(compact.ordens, [{ 'Ord Prod': '10', 'DT Emissão': '01/01/2026' }]);
+  assert.deepEqual(compact.apontamentos, apontamentos.map((row) => ({
+    'Ord Prod': row['Ord Prod'], 'Desc Máquina': row['Desc Máquina'], 'Nome Usuário': row['Nome Usuário'],
+  })));
+  assert.equal(compact.updatedAt, raw.updatedAt);
+  bindings.DB.viewChunks = [];
+  const legacy = await (await request('/api/data?view=compact', { db: bindings, cookie: viewer })).json();
+  assert.deepEqual(legacy, compact);
+  const replacement = await stagedUpload(bindings, admin, [{ 'Numero da OP': '2', extra: 'new' }],
+    [{ 'Ord Prod': '20' }], {
+      apontamentos: [{ 'Ord Prod': '20', 'Desc Máquina': 'Outro', 'Nome Usuário': 'C', Horário: '11:00' }],
+    });
+  assert.equal(replacement.complete.status, 201);
+  const updated = await (await request('/api/data?view=compact', { db: bindings, cookie: viewer })).json();
+  assert.equal(updated.ops[0]['Numero da OP'], '2');
+  assert.equal(updated.apontamentos[0]['Nome Usuário'], 'C');
+  assert.ok(bindings.DB.viewChunks.every((chunk) => chunk.snapshotId === replacement.uploadId));
+  assert.equal((await request('/api/data?view=compact', { db: bindings })).status, 401);
+});
+
+test('refuses to publish if compact view is incomplete', async () => {
+  const bindings = env();
+  const { cookie: admin } = await login(bindings, bindings.ADMIN_PASSWORD);
+  const initial = await request('/api/data', {
+    db: bindings, cookie: admin, method: 'PUT',
+    body: { ops: [{ 'Numero da OP': 'old' }], ordens: [{ 'Ord Prod': 'old' }],
+      apontamentos: [{ 'Ord Prod': 'old', 'Desc Máquina': 'M', 'Nome Usuário': 'U' }] },
+  });
+  assert.equal(initial.status, 201);
+  const previous = bindings.DB.activeSnapshotId;
+  const original = bindings.DB.batch.bind(bindings.DB);
+  bindings.DB.batch = async (statements) => {
+    await original(statements);
+    if (statements.some((statement) => statement.query.startsWith('INSERT INTO dataset_view_chunks'))) {
+      bindings.DB.viewChunks = bindings.DB.viewChunks.filter((chunk) => chunk.snapshotId === previous);
+    }
+  };
+  const { complete } = await stagedUpload(bindings, admin, [{ 'Numero da OP': 'new' }], [{ 'Ord Prod': 'new' }]);
+  assert.equal(complete.status, 400);
+  assert.equal(bindings.DB.activeSnapshotId, previous);
 });
 
 test('laser schedule is shared with viewers and writable only by admins', async () => {

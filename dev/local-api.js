@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MAX_LASER_SCHEDULE_BYTES, validLaserSchedule } from '../src/laser-schedule.js';
 import { separationKey, validSeparationUpdate } from '../src/laser-separation.js';
+import { projectViewDataset } from '../src/dataset-projection.js';
 
 const MAX_CHUNK_BYTES = 1024 * 1024;
 const ROWS_PER_CHUNK = 100;
@@ -54,6 +55,7 @@ function validProductionReports(rows) {
 
 function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE, separationFile = SEPARATION_FILE } = {}) {
   let dataset = emptyDataset();
+  let viewDataset = projectViewDataset(dataset);
   let schedule = { rows: [], updatedAt: null };
   let separation = new Map();
   let separationWrites = Promise.resolve();
@@ -61,6 +63,7 @@ function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE, separati
   const datasetReady = readFile(dataFile, 'utf8')
     .then((contents) => {
       dataset = { ...emptyDataset(), ...JSON.parse(contents) };
+      viewDataset = projectViewDataset(dataset);
     })
     .catch((error) => {
       if (error.code !== 'ENOENT') throw error;
@@ -153,7 +156,7 @@ function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE, separati
             return sendJson(response, { updatedAt: schedule.updatedAt }, 201);
           }
           if (url.pathname === '/api/data' && request.method === 'GET') {
-            return sendJson(response, dataset);
+            return sendJson(response, url.searchParams.get('view') === 'compact' ? viewDataset : dataset);
           }
 
           if (url.pathname === '/api/data' && request.method === 'POST') {
@@ -212,6 +215,7 @@ function localApi({ dataFile = DATA_FILE, scheduleFile = SCHEDULE_FILE, separati
               }
               dataset = { ...rowsByKind, updatedAt: new Date().toISOString() };
               await persist();
+              viewDataset = projectViewDataset(dataset);
               uploads.delete(payload.uploadId);
               return sendJson(response, { updatedAt: dataset.updatedAt }, 201);
             }
