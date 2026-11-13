@@ -50,6 +50,25 @@ export function normalizeOp(value) {
   return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, '') : text.toUpperCase();
 }
 
+export function searchLaserMachines(machines, query) {
+  const term = normalize(query);
+  if (!term) return machines;
+  const matches = (value) => normalize(value ?? '').includes(term);
+  const matchesOp = (value) => matches(value)
+    || (/^\d+$/.test(term) && /^\d+$/.test(String(value ?? '').trim())
+      && normalizeOp(value) === normalizeOp(term));
+  return machines.flatMap((machine) => {
+    const programs = machine.programs.filter((program) =>
+      matches(program.program) || matches(program.job)
+      || program.ops.some(matchesOp)
+      || (program.clOps || []).some((op) =>
+        matchesOp(op.num) || matches(op.desc)
+        || op.steps.some((step) => matchesOp(step.ord) || matches(step.item))),
+    );
+    return programs.length ? [{ ...machine, programs }] : [];
+  });
+}
+
 export function validLaserSchedule(rows) {
   return Array.isArray(rows) && rows.length > 0 && rows.length <= MAX_SCHEDULE_ROWS
     && rows.every((row) => row && typeof row === 'object' && !Array.isArray(row)

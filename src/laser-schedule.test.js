@@ -1,7 +1,40 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
-import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, validLaserSchedule } from './laser-schedule.js';
+import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, searchLaserMachines, validLaserSchedule } from './laser-schedule.js';
+
+test('searches CL jobs, operations and products across machines without changing totals', () => {
+  const rows = [
+    { machine: 'Fiber 4', program: 'PROG-A', sequence: 1, hours: 2, ops: ['00123'] },
+    { machine: 'Fiber 6', program: 'PROG-B', sequence: 1, hours: 3, ops: ['123'] },
+    { machine: 'Fiber 6', program: 'UNKNOWN', sequence: 2, hours: 4, ops: ['999'] },
+    { machine: 'Yawei', program: 'OTHER', sequence: 1, hours: 5, ops: ['456'] },
+  ];
+  const jobs = [
+    ['JOB-X', [
+      { num: '123', desc: 'Peça especial', steps: [
+        { stageCode: 'CL', qtd: 10, reported: 5, ord: 'ORD-CL', item: 'CL-ITEM' },
+        { stageCode: 'DB', qtd: 10, reported: 0, ord: 'ORD-DB', item: 'DB-ONLY' },
+      ] },
+      { num: '789', desc: 'Outra peça', steps: [{ stageCode: 'CL', qtd: 1, reported: 0, ord: 'SECOND', item: 'OUTRO-ITEM' }] },
+    ]],
+    ['JOB-Y', [{ num: '456', desc: 'Produto Y', steps: [{ stageCode: 'CL', qtd: 2, reported: 0, item: 'ITEM-Y' }] }]],
+  ];
+  const { machines } = groupLaserSchedule(rows, jobs);
+  for (const query of ['job-x', 'PROG-a', '00123', 'ord-cl', 'cl-item', 'peca especial', '789', 'outro-item']) {
+    const result = searchLaserMachines(machines, query);
+    assert.deepEqual(result.map((machine) => machine.machine), query === 'PROG-a' ? ['Fiber 4'] : ['Fiber 4', 'Fiber 6']);
+    assert.ok(result.every((machine) => machine.programs.length === 1));
+  }
+  assert.deepEqual(searchLaserMachines(machines, 'DB-ONLY'), []);
+  assert.deepEqual(searchLaserMachines(machines, 'ord-db'), []);
+  const unmatched = searchLaserMachines(machines, '999');
+  assert.equal(unmatched[0].programs[0].found, false);
+  assert.deepEqual(searchLaserMachines(machines, 'sem resultado'), []);
+  assert.equal(searchLaserMachines(machines, '  '), machines);
+  assert.equal(machines.find((machine) => machine.machine === 'Fiber 6').programs.length, 2);
+  assert.equal(machines.find((machine) => machine.machine === 'Fiber 6').hours, 3);
+});
 
 test('estimates remaining hours equally per CL OP and includes unmatched programs', () => {
   const rows = [

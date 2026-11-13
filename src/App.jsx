@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
-import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet } from './laser-schedule.js';
+import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
 import { LASER_SEPARATION_PAID, LASER_SEPARATION_PENDING, separationKey } from './laser-separation.js';
 
 const decode = (buf) => {
@@ -432,6 +432,7 @@ export default function App() {
   const [ordens, setOrdens] = useState([]);
   const [apontamentos, setApontamentos] = useState([]);
   const [search, setSearch] = useState('');
+  const [laserSearch, setLaserSearch] = useState('');
   const [filtro, setFiltro] = useState('');
   const [etapaFiltro, setEtapaFiltro] = useState('');
   const [activeView, setActiveView] = useState('production');
@@ -750,6 +751,12 @@ export default function App() {
   );
   const activeMachine = laserLoad.machines.find((machine) => machine.machine === selectedMachine)
     || laserLoad.machines[0];
+  const isLaserSearching = laserSearch.trim().length > 0;
+  const matchingLaserMachines = useMemo(
+    () => searchLaserMachines(laserLoad.machines, laserSearch),
+    [laserLoad.machines, laserSearch],
+  );
+  const visibleLaserMachines = isLaserSearching ? matchingLaserMachines : activeMachine ? [activeMachine] : [];
   const jobEmissions = useMemo(() => new Map(tree.map(([job, list]) => {
     const dates = list.map((op) => op.emissao).filter(Boolean);
     dates.sort((a, b) => dateSortValue(a) - dateSortValue(b));
@@ -1102,7 +1109,23 @@ export default function App() {
                           );
                         })}
                       </div>
-                      <div className="laser-load-machines" role="group" aria-label="Filtrar por máquina">
+                      <div className="laser-search">
+                        <div className="search-wrap">
+                          <Search className="search-icon" aria-hidden="true" />
+                          <input
+                            type="search"
+                            aria-label="Pesquisar em Corte Laser"
+                            placeholder="Buscar Job, OP ou produto em todas as máquinas"
+                            className="search-input"
+                            value={laserSearch}
+                            onChange={(event) => setLaserSearch(event.target.value)}
+                          />
+                        </div>
+                        <p className="laser-load-description">
+                          {isLaserSearching ? 'Resultados em todas as máquinas. Limpe a pesquisa para selecionar uma máquina.' : 'Pesquise em todas as máquinas ou selecione uma abaixo.'}
+                        </p>
+                      </div>
+                      {!isLaserSearching && <div className="laser-load-machines" role="group" aria-label="Filtrar por máquina">
                         {laserLoad.machines.map((machine) => (
                           <button
                             type="button"
@@ -1114,19 +1137,23 @@ export default function App() {
                             {machine.machine}
                           </button>
                         ))}
-                      </div>
-                      <section className="laser-load-machine" aria-label={`Carga da máquina ${activeMachine.machine}`}>
-                        <h4 className="laser-machine-heading">{activeMachine.machine}</h4>
-                        {activeMachine.programs.length === 0 ? (
+                      </div>}
+                      {isLaserSearching && visibleLaserMachines.length === 0 && (
+                        <p className="laser-load-description" role="status">Nenhum programa encontrado para esta pesquisa.</p>
+                      )}
+                      {visibleLaserMachines.map((machine) => (
+                      <section className="laser-load-machine" key={machine.machine} aria-label={`Carga da máquina ${machine.machine}`}>
+                        <h4 className="laser-machine-heading">{machine.machine}</h4>
+                        {machine.programs.length === 0 ? (
                           <p className="laser-load-description laser-machine-empty">Nenhum programa desta máquina corresponde às OPs da etapa CL.</p>
                         ) : (
                           <div className="integration-table-wrap">
                             <table className="integration-table">
                               <thead><tr><th>Seq</th><th>Programa</th><th>Carga</th><th>Reportado / planejado</th><th>Separação</th><th>Progresso CL</th><th>Status</th></tr></thead>
                               <tbody>
-                                {activeMachine.programs.map((program, index) => (
+                                {machine.programs.map((program, index) => (
                                   <LaserProgramRow
-                                    key={`${activeMachine.machine}-${program.sequence}-${index}`}
+                                    key={`${machine.machine}-${program.sequence}-${index}`}
                                     program={program}
                                     isAdmin={isAdmin}
                                     separation={separationStatuses === null
@@ -1141,6 +1168,7 @@ export default function App() {
                           </div>
                         )}
                       </section>
+                      ))}
                     </>
                   )}
                 </section>

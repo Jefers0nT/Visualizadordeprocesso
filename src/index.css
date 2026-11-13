@@ -791,6 +791,10 @@ button {
   margin: 8px 0;
 }
 
+.laser-search {
+  margin: 20px 0 12px;
+}
+
 .laser-dashboard {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
