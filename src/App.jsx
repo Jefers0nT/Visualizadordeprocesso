@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
 import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
-import { LASER_SEPARATION_OPTIONS, LASER_SEPARATION_PENDING, separationKey } from './laser-separation.js';
+import { LASER_SEPARATION_OPTIONS, separationKey, separationStatus } from './laser-separation.js';
 import { getField, normalizeHeader } from './dataset-projection.js';
 
 const decode = (buf) => {
@@ -1158,9 +1158,7 @@ export default function App() {
                                     key={`${machine.machine}-${program.sequence}-${index}`}
                                     program={program}
                                     isAdmin={isAdmin}
-                                    separation={separationStatuses === null
-                                      ? null
-                                      : separationStatuses[separationKey(program.machine, program.program)] || LASER_SEPARATION_PENDING}
+                                    separation={separationStatus(separationStatuses, program.machine, program.program)}
                                     savingSeparation={savingSeparation || loading}
                                     onSeparationChange={handleSeparationChange}
                                   />

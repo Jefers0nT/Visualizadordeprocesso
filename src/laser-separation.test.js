@@ -2,7 +2,26 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
-import { LASER_SEPARATION_OPTIONS, validSeparationUpdate } from './laser-separation.js';
+import { LASER_SEPARATION_DEFAULT, LASER_SEPARATION_OPTIONS, separationKey, separationStatus, validSeparationUpdate } from './laser-separation.js';
+
+test('new machine and program defaults to awaiting PCP without changing saved values', () => {
+  const saved = {
+    [separationKey('A', '1')]: 'pending',
+    [separationKey('A', '2')]: 'paid',
+    [separationKey('B', '1')]: 'reschedule',
+    [separationKey('B', '2')]: 'missing_material',
+    [separationKey('B', '3')]: 'awaiting_pcp',
+  };
+  assert.equal(LASER_SEPARATION_DEFAULT, 'awaiting_pcp');
+  assert.equal(separationStatus({}, 'A', '1'), 'awaiting_pcp');
+  assert.equal(separationStatus(saved, 'C', '1'), 'awaiting_pcp');
+  assert.equal(separationStatus(saved, 'A', '1'), 'pending');
+  assert.equal(separationStatus(saved, 'A', '2'), 'paid');
+  assert.equal(separationStatus(saved, 'B', '1'), 'reschedule');
+  assert.equal(separationStatus(saved, 'B', '2'), 'missing_material');
+  assert.equal(separationStatus(saved, 'B', '3'), 'awaiting_pcp');
+  assert.equal(separationStatus(null, 'A', '1'), null);
+});
 
 test('migration preserves existing statuses and accepts exactly the supported values', async () => {
   const db = new DatabaseSync(':memory:');
