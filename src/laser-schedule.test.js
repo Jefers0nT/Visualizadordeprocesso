@@ -3,6 +3,34 @@ import test from 'node:test';
 import ExcelJS from 'exceljs';
 import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, searchLaserMachines, validLaserSchedule } from './laser-schedule.js';
 
+test('includes scrap and rework in CL progress, status and hour estimates', () => {
+  const rows = [
+    { machine: 'A', program: 'JOB', sequence: 1, hours: 3, ops: ['1'] },
+    { machine: 'A', program: 'PARTIAL', sequence: 2, hours: 2, ops: ['2'] },
+  ];
+  const jobs = [
+    ['JOB', [{ num: '1', steps: [
+      { stageCode: 'CL', qtd: 15, reported: 14, reworkQty: 0, scrapQty: 1 },
+      { stageCode: 'DB', qtd: 10, reported: 0, reworkQty: 4, scrapQty: 0 },
+    ] }]],
+    ['PARTIAL', [{ num: '2', steps: [
+      { stageCode: 'CL', qtd: 10, reported: 3, reworkQty: 2, scrapQty: 1 },
+    ] }]],
+  ];
+  const { machines } = groupLaserSchedule(rows, jobs);
+  const [complete, partial] = machines[0].programs;
+  assert.equal(complete.reported, 15);
+  assert.equal(complete.planned, 15);
+  assert.equal(laserProgramStatus(complete).label, 'Concluído');
+  assert.equal(complete.clOps[0].steps[0].reported, 14);
+  assert.equal(complete.clOps[0].steps[0].scrapQty, 1);
+  assert.equal(partial.reported, 6);
+  assert.equal(laserProgramStatus(partial).label, 'Corte Parcial');
+  assert.deepEqual(laserJobCounts(machines[0].jobs), { complete: 1, partial: 1, progress: 0 });
+  assert.deepEqual(estimateLaserHours([complete]), { total: 3, cut: 3, remaining: 0, unverified: 0 });
+  assert.deepEqual(estimateLaserHours([partial]), { total: 2, cut: 1.2, remaining: 0.8, unverified: 0 });
+});
+
 test('searches CL jobs, operations and products across machines without changing totals', () => {
   const rows = [
     { machine: 'Fiber 4', program: 'PROG-A', sequence: 1, hours: 2, ops: ['00123'] },

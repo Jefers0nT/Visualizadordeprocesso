@@ -4,6 +4,7 @@ import { toast, Toaster } from 'sonner';
 import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
 import { LASER_SEPARATION_OPTIONS, separationKey, separationStatus } from './laser-separation.js';
 import { getField, normalizeHeader } from './dataset-projection.js';
+import { totalReported } from './production-progress.js';
 
 const decode = (buf) => {
   try {
@@ -98,8 +99,8 @@ const percent = (reported, total) =>
   `${Number((total > 0 ? Math.min((reported / total) * 100, 100) : 0).toFixed(1))}%`;
 const uniqueText = (values) => [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))].join(', ');
 const COMBINED_STAGE_FILTER = '__one-letter-two-digits__';
-const isPendingOp = (op) => op.steps.every((step) => step.reported === 0);
-const isStepComplete = (step) => step.qtd > 0 && step.reported >= step.qtd;
+const isPendingOp = (op) => op.steps.every((step) => totalReported(step) === 0);
+const isStepComplete = (step) => step.qtd > 0 && totalReported(step) >= step.qtd;
 const isOpComplete = (op) => op.steps.length > 0 && op.steps.every(isStepComplete);
 
 function dateSortValue(value) {
@@ -161,6 +162,7 @@ function buildTree(ops, ordens, apontamentos = []) {
       const reported = num(getField(order, 'Quant Rep'));
       const reworkQty = num(getField(order, 'Quant Retrab'));
       const scrapQty = num(getField(order, 'Quant Refug'));
+      const progress = totalReported({ reported, reworkQty, scrapQty });
       const item = String(getField(row, 'Produto') || '');
 
       return {
@@ -176,9 +178,9 @@ function buildTree(ops, ordens, apontamentos = []) {
         scrapQty,
         machine: uniqueText(reportRows.map((report) => report.machine)),
         reporter: uniqueText(reportRows.map((report) => report.reporter)),
-        st: isStepComplete({ qtd, reported })
+        st: isStepComplete({ qtd, reported, reworkQty, scrapQty })
           ? 'Concluída'
-          : reported > 0 ? 'Em andamento' : 'Pendente',
+          : progress > 0 ? 'Em andamento' : 'Pendente',
         emissao: dt(getField(order, 'DT Emissão') || getField(row, 'DT Emissão')),
         inicio: dt(order['Inicio Ordem']),
         fim: dt(order['Fim Ordem']),
@@ -196,7 +198,7 @@ function buildTree(ops, ordens, apontamentos = []) {
         (a, b) => dateSortValue(a) - dateSortValue(b),
       )[0] || '',
       totalQty: steps.reduce((sum, step) => sum + step.qtd, 0),
-      reportedQty: steps.reduce((sum, step) => sum + step.reported, 0),
+      reportedQty: steps.reduce((sum, step) => sum + totalReported(step), 0),
     };
 
     if (!jobs.has(job)) jobs.set(job, []);
@@ -224,7 +226,7 @@ function StepNode({ s }) {
   const c = sty(s.st);
 
   return (
-    <div className={`step-node ${c.border}`} title={`Ordem ${s.ord} · Quant Rep/Quantidade`}>
+    <div className={`step-node ${c.border}`} title={`Ordem ${s.ord} · (Reportado + Retrabalho + Refugo)/Quantidade`}>
       <span className="step-sigla">{s.sigla}</span>
       <span className="step-desc">{s.desc || s.item}</span>
       <span className="step-detail">Produto: {s.item}</span>
@@ -236,7 +238,10 @@ function StepNode({ s }) {
           Reportado: {s.reported} · Retrabalho: {s.reworkQty} · Refugo: {s.scrapQty}
         </span>
       )}
-      <span className="step-qty">{percent(s.reported, s.qtd)} reportado</span>
+      {(s.reworkQty !== 0 || s.scrapQty !== 0) && (
+        <span className="step-detail">Total considerado: {totalReported(s)}</span>
+      )}
+      <span className="step-qty">{percent(totalReported(s), s.qtd)} reportado</span>
       {s.emissao && <span className="step-date">DT Emissão {s.emissao}</span>}
       {s.inicio && <span className="step-date">Início Ordem {s.inicio}</span>}
       {s.fim && <span className="step-date">Fim {s.fim}</span>}
@@ -778,7 +783,7 @@ export default function App() {
     ).length,
     parciais: tree.filter(([job, list]) =>
       job
-      && list.some((op) => op.steps.some((step) => step.reported > 0))
+      && list.some((op) => op.steps.some((step) => totalReported(step) > 0))
       && !jobCompletion.get(job),
     ).length,
     concluidas: [...jobCompletion].filter(([job, complete]) => job && complete).length,
@@ -817,7 +822,7 @@ export default function App() {
               ...op,
               steps: visibleSteps,
               totalQty: visibleSteps.reduce((sum, step) => sum + step.qtd, 0),
-              reportedQty: visibleSteps.reduce((sum, step) => sum + step.reported, 0),
+              reportedQty: visibleSteps.reduce((sum, step) => sum + totalReported(step), 0),
             };
             return matchesSearch(visibleOp) ? [visibleOp] : [];
           }),

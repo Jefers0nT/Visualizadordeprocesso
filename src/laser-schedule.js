@@ -126,7 +126,7 @@ export function groupLaserSchedule(rows, productionJobs) {
         ...op,
         steps,
         totalQty: steps.reduce((total, step) => total + step.qtd, 0),
-        reportedQty: steps.reduce((total, step) => total + step.reported, 0),
+        reportedQty: steps.reduce((total, step) => total + totalReported(step), 0),
       }];
     });
     if (!clOps.length) continue;
@@ -174,3 +174,4 @@ export function groupLaserSchedule(rows, productionJobs) {
     unmatched,
   };
 }
+import { totalReported } from './production-progress.js';
