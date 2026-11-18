@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
-import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
+import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
 import { LASER_SEPARATION_OPTIONS, separationKey, separationStatus } from './laser-separation.js';
 import { getField, normalizeHeader } from './dataset-projection.js';
 import { totalReported } from './production-progress.js';
@@ -1092,16 +1092,16 @@ export default function App() {
                           <article className="laser-dashboard-card" key={machine.machine}>
                             <h4>{machine.machine}</h4>
                             <div className="laser-dashboard-hours">
-                              <strong>{machine.hours.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</strong>
+                              <strong>{formatLaserDuration(machine.hours)}</strong>
                               <span>de programas encontrados</span>
                             </div>
                             <div className="laser-dashboard-estimate">
                               <div className="laser-dashboard-estimate-heading">
-                                <strong>{estimate.remaining.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</strong>
+                                <strong>{formatLaserDuration(estimate.remaining)}</strong>
                                 <span>estimadas para cortar</span>
                               </div>
                               <strong className="laser-dashboard-cut">
-                                {estimate.cut.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h cortadas
+                                {formatLaserDuration(estimate.cut)} cortadas
                               </strong>
                             </div>
                             <div className="laser-dashboard-counts">

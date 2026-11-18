@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
-import { estimateLaserHours, groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, searchLaserMachines, validLaserSchedule } from './laser-schedule.js';
+import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, searchLaserMachines, validLaserSchedule } from './laser-schedule.js';
+
+test('formats decimal hours as hours and minutes', () => {
+  assert.equal(formatLaserDuration(0.83), '0 h 50 min');
+  assert.equal(formatLaserDuration(7.88), '7 h 53 min');
+  assert.equal(formatLaserDuration(1.999), '2 h 0 min');
+});
 
 test('includes scrap and rework in CL progress, status and hour estimates', () => {
   const rows = [

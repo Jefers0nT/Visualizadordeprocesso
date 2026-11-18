@@ -45,6 +45,13 @@ export function estimateLaserHours(programs) {
   return { total, cut, remaining: Math.max(0, total - cut), unverified };
 }
 
+export function formatLaserDuration(hours) {
+  const totalMinutes = Math.round(hours * 60);
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${wholeHours.toLocaleString('pt-BR')} h ${minutes} min`;
+}
+
 export function normalizeOp(value) {
   const text = String(value).trim();
   return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, '') : text.toUpperCase();
