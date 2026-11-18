@@ -6,10 +6,19 @@ const normalize = (value) => String(value).normalize('NFD')
 
 export function laserProgramStatus(program) {
   if (program.complete) return { label: 'Concluído', className: 'laser-status-complete' };
-  if (program.planned > 0 && program.reported > 0 && program.reported < program.planned) {
+  const reported = program.progressReported ?? program.reported;
+  if (program.planned > 0 && reported > 0 && reported < program.planned) {
     return { label: 'Corte Parcial', className: 'laser-status-partial' };
   }
   return { label: 'Em andamento', className: 'laser-status-progress' };
+}
+
+export function laserProgramPercent(program) {
+  if (program.planned <= 0) return '0%';
+  const reported = program.progressReported ?? program.reported;
+  let value = Number((Math.max(0, Math.min(reported / program.planned, 1)) * 100).toFixed(2));
+  if (!program.complete && value >= 100) value = 99.99;
+  return `${value.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
 }
 
 export function laserJobCounts(jobs) {
@@ -139,7 +148,13 @@ export function groupLaserSchedule(rows, productionJobs) {
     if (!clOps.length) continue;
     const planned = clOps.reduce((total, op) => total + op.totalQty, 0);
     const reported = clOps.reduce((total, op) => total + op.reportedQty, 0);
-    jobs.set(key, { job: name, planned, reported, complete: planned > 0 && reported >= planned, clOps });
+    const progressReported = clOps.reduce((total, op) => total + op.steps.reduce((stepTotal, step) => {
+      return stepTotal + Math.max(0, Math.min(totalReported(step), step.qtd));
+    }, 0), 0);
+    const complete = planned > 0 && clOps.every((op) =>
+      op.steps.length > 0 && op.steps.every((step) => step.qtd > 0 && totalReported(step) >= step.qtd),
+    );
+    jobs.set(key, { job: name, planned, reported, progressReported, complete, clOps });
     for (const op of ops) {
       const opKey = normalizeOp(op.num ?? '');
       if (!opKey) continue;

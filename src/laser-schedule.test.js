@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
-import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramStatus, parseLaserWorksheet, searchLaserMachines, validLaserSchedule } from './laser-schedule.js';
+import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramPercent, laserProgramStatus, parseLaserWorksheet, searchLaserMachines, validLaserSchedule } from './laser-schedule.js';
 
 test('formats decimal hours as hours and minutes', () => {
   assert.equal(formatLaserDuration(0.83), '0 h 50 min');
@@ -116,6 +116,27 @@ test('labels partial CL progress without changing zero and complete statuses', (
   for (const [program, expected] of cases) {
     assert.equal(laserProgramStatus(program).label, expected);
   }
+});
+
+test('keeps a laser program incomplete when one CL order is short despite over-reporting elsewhere', () => {
+  const rows = [{ machine: 'Fiber 4', program: '0211K', sequence: 1, hours: 2, ops: ['275041'] }];
+  const jobs = [['0211K', [
+    { num: '275041', steps: [{ stageCode: 'CL', qtd: 100, reported: 99 }] },
+    { num: '275042', steps: [{ stageCode: 'CL', qtd: 100, reported: 101 }] },
+  ]]];
+  const { machines } = groupLaserSchedule(rows, jobs);
+  const [program] = machines[0].programs;
+
+  assert.equal(program.reported, 200);
+  assert.equal(program.progressReported, 199);
+  assert.equal(program.complete, false);
+  assert.equal(laserProgramPercent(program), '99,5%');
+  assert.equal(laserProgramStatus(program).label, 'Corte Parcial');
+  assert.equal(laserProgramPercent({
+    progressReported: 9999.999,
+    planned: 10000,
+    complete: false,
+  }), '99,99%');
 });
 
 test('parses a sequenciamento workbook and calculates matching CL load once per program', async () => {

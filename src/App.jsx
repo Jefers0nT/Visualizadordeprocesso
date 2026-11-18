@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
-import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
+import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramPercent, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
 import { LASER_SEPARATION_OPTIONS, separationKey, separationStatus } from './laser-separation.js';
 import { getField, normalizeHeader } from './dataset-projection.js';
 import { totalReported } from './production-progress.js';
@@ -403,7 +403,7 @@ function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSep
             </span>
           )}
         </td>
-        <td>{program.found ? percent(program.reported, program.planned) : '—'}</td>
+        <td>{program.found ? laserProgramPercent(program) : '—'}</td>
         <td>
           {program.found ? (
             <span className={`integration-status ${status.className}`}>
@@ -1055,7 +1055,7 @@ export default function App() {
                       <p className="integration-eyebrow">SEQUENCIAMENTO · CL</p>
                       <h3 id="laser-load-heading">Carga por máquina</h3>
                       <p className="laser-load-description">
-                        O progresso considera todas as etapas CL do Job na Visão de produção.
+                        O progresso considera todas as etapas CL do Job e limita cada ordem à quantidade planejada, para que excedentes não compensem ordens pendentes.
                       </p>
                       <p className="laser-load-description">
                         Horas estimadas dividem a carga de cada programa igualmente entre as OPs CL do Job.
