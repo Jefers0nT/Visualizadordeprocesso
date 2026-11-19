@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw } from 'lucide-react';
+import { Search, Network, FileSpreadsheet, FolderOpen, ChevronRight, RefreshCw, Moon, Sun } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
 import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramPercent, laserProgramStatus, MAX_LASER_SCHEDULE_BYTES, parseLaserWorksheet, searchLaserMachines } from './laser-schedule.js';
 import { LASER_SEPARATION_OPTIONS, separationKey, separationStatus } from './laser-separation.js';
@@ -362,10 +362,22 @@ function JobGroup({ job, list, jobComplete, jobEmission }) {
   );
 }
 
+function LaserDuration({ hours, className = '' }) {
+  const formatted = formatLaserDuration(hours);
+  const [wholeHours, minutes] = formatted.split(':');
+  return (
+    <span className={`laser-duration ${className}`} role="img"
+      aria-label={`${Number(wholeHours)} horas e ${Number(minutes)} minutos`}>
+      {formatted} <small aria-hidden="true">h:min</small>
+    </span>
+  );
+}
+
 function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSeparationChange }) {
   const [isOpen, setIsOpen] = useState(false);
   const status = program.found ? laserProgramStatus(program) : null;
   const separationOption = LASER_SEPARATION_OPTIONS.find((option) => option.value === separation);
+  const progress = program.found ? laserProgramPercent(program) : null;
 
   return (
     <>
@@ -380,7 +392,7 @@ function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSep
             </button>
           ) : program.program}
         </td>
-        <td>{program.hours.toLocaleString('pt-BR', { maximumFractionDigits: 2 })} h</td>
+        <td><LaserDuration hours={program.hours} className="laser-table-load" /></td>
         <td>{program.found ? `${program.reported.toLocaleString('pt-BR')} / ${program.planned.toLocaleString('pt-BR')}` : '—'}</td>
         <td>
           {separation === null || !separationOption ? (
@@ -403,7 +415,18 @@ function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSep
             </span>
           )}
         </td>
-        <td>{program.found ? laserProgramPercent(program) : '—'}</td>
+        <td>
+          {progress === null ? '—' : (
+            <div className="laser-table-progress" role="progressbar"
+              aria-label={`Progresso CL do programa ${program.program} na máquina ${program.machine}`}
+              aria-valuemin={0} aria-valuemax={100}
+              aria-valuenow={Number.parseFloat(progress.replace(',', '.'))} aria-valuetext={progress}>
+              <span className="laser-table-progress-fill"
+                style={{ width: progress.replace(',', '.') }} />
+              <strong>{progress}</strong>
+            </div>
+          )}
+        </td>
         <td>
           {program.found ? (
             <span className={`integration-status ${status.className}`}>
@@ -429,6 +452,14 @@ function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSep
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem('visualizador-theme') === 'light' ? 'light' : 'dark';
+    } catch (error) {
+      console.warn('Não foi possível carregar o tema salvo.', error);
+      return 'dark';
+    }
+  });
   const [ops, setOps] = useState([]);
   const [ordens, setOrdens] = useState([]);
   const [apontamentos, setApontamentos] = useState([]);
@@ -833,9 +864,21 @@ export default function App() {
 
   const hasData = ops.length > 0;
 
+  const toggleTheme = () => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme);
+    try {
+      localStorage.setItem('visualizador-theme', nextTheme);
+    } catch (error) {
+      console.warn('Não foi possível salvar o tema.', error);
+      toast.error('Não foi possível salvar a preferência de tema neste navegador.');
+    }
+  };
+
   return (
     <div
       className="app-shell"
+      data-theme={theme}
       onDragOver={(event) => {
         if (!authenticated || !isAdmin || saving) return;
         event.preventDefault();
@@ -850,6 +893,11 @@ export default function App() {
       }}
     >
       <header className="topbar">
+        <button type="button" className="theme-toggle" onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}
+          title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}>
+          {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+        </button>
         <div className={`topbar-inner ${activeView === 'integration' ? 'topbar-inner-wide' : ''}`}>
           <div>
             <h1 className="title">
@@ -1091,18 +1139,19 @@ export default function App() {
                           return (
                           <article className="laser-dashboard-card" key={machine.machine}>
                             <h4>{machine.machine}</h4>
-                            <div className="laser-dashboard-hours">
-                              <strong>{formatLaserDuration(machine.hours)}</strong>
-                              <span>de programas encontrados</span>
-                            </div>
-                            <div className="laser-dashboard-estimate">
-                              <div className="laser-dashboard-estimate-heading">
-                                <strong>{formatLaserDuration(estimate.remaining)}</strong>
-                                <span>estimadas para cortar</span>
+                            <div className="laser-dashboard-times">
+                              <div className="laser-time laser-time-total">
+                                <span>Programas encontrados</span>
+                                <LaserDuration hours={machine.hours} />
                               </div>
-                              <strong className="laser-dashboard-cut">
-                                {formatLaserDuration(estimate.cut)} cortadas
-                              </strong>
+                              <div className="laser-time laser-time-remaining">
+                                <span>Estimadas para cortar</span>
+                                <LaserDuration hours={estimate.remaining} />
+                              </div>
+                              <div className="laser-time laser-time-cut">
+                                <span>Horas cortadas</span>
+                                <LaserDuration hours={estimate.cut} />
+                              </div>
                             </div>
                             <div className="laser-dashboard-counts">
                               <span><strong>{machine.programs.length}</strong> programa(s)</span>
@@ -1279,7 +1328,7 @@ export default function App() {
         )}
       </main>
 
-      <Toaster richColors position="top-right" />
+      <Toaster richColors position="top-right" theme={theme} />
     </div>
   );
 }

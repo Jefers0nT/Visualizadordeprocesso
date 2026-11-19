@@ -50,9 +50,27 @@ button {
 .app-shell {
   min-height: 100vh;
   background: linear-gradient(180deg, #0b1120 0%, #020817 100%);
+  color-scheme: dark;
+}
+
+.app-shell[data-theme="light"] {
+  --bg: #f1f5f9;
+  --bg-elevated: #e2e8f0;
+  --panel: #fff;
+  --panel-alt: #f8fafc;
+  --card: #fff;
+  --line: rgba(71, 85, 105, 0.25);
+  --muted: #475569;
+  --text: #0f172a;
+  --text-soft: #334155;
+  --shadow: rgba(15, 23, 42, 0.12);
+  background: linear-gradient(180deg, #eaf1f9 0%, #f8fafc 100%);
+  color: var(--text);
+  color-scheme: light;
 }
 
 .topbar {
+  position: relative;
   background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
   color: white;
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
@@ -61,12 +79,31 @@ button {
 .topbar-inner {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 28px 24px 20px;
+  padding: 28px 70px 20px 24px;
   display: flex;
   justify-content: space-between;
   gap: 24px;
   align-items: end;
 }
+
+.theme-toggle {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.18);
+  color: #fff;
+}
+
+.theme-toggle:hover { background: rgba(15, 23, 42, 0.35); }
+.theme-toggle:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.theme-toggle svg { width: 18px; height: 18px; }
 
 .topbar-inner-wide,
 .main-panel.main-panel-wide {
@@ -818,46 +855,81 @@ button {
   color: var(--text);
 }
 
-.laser-dashboard-hours {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.laser-dashboard-hours strong {
-  color: #7dd3fc;
-  font-size: 1.3rem;
-}
-
-.laser-dashboard-hours span,
-.laser-dashboard-estimate span,
 .laser-dashboard-counts {
   color: var(--text-soft);
   font-size: 0.8rem;
 }
 
-.laser-dashboard-estimate {
+.laser-dashboard-times {
   display: grid;
-  gap: 3px;
-  margin-top: 10px;
+  gap: 6px;
 }
 
-.laser-dashboard-estimate strong {
-  color: #fdba74;
-  font-size: 1.15rem;
-}
-
-.laser-dashboard-estimate .laser-dashboard-cut {
-  color: #86efac;
-  font-size: 0.95rem;
-}
-
-.laser-dashboard-estimate-heading {
+.laser-time {
   display: flex;
-  align-items: baseline;
-  gap: 7px;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
+  gap: 2px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-alt);
+}
+
+.laser-time span {
+  color: var(--text-soft);
+  font-size: 0.75rem;
+}
+
+.laser-duration,
+.laser-table-progress strong {
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.laser-time .laser-duration { font-size: 1rem; white-space: nowrap; }
+.laser-time-total .laser-duration { color: #7dd3fc; }
+.laser-time-remaining .laser-duration { color: #fdba74; }
+.laser-time-cut .laser-duration { color: #86efac; }
+.laser-duration small { font-size: 0.65em; color: var(--muted); }
+
+.laser-table-load {
+  display: inline-block;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-alt);
+  color: var(--text);
+}
+
+.laser-table-progress {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 130px;
+  height: 26px;
+  overflow: hidden;
+  border: 2px solid #00c978;
+  border-radius: 999px;
+  background: #071629;
+}
+
+.laser-table-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #065f46, #00e58a);
+}
+
+.laser-table-progress strong {
+  position: relative;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(2, 8, 23, 0.85);
+  color: #fff;
+  font-size: 0.75rem;
 }
 
 .laser-dashboard-counts {
@@ -1320,6 +1392,55 @@ button {
 .badge-andamento { background: rgba(56, 189, 248, 0.12); color: #7dd3fc; }
 .badge-pendente { background: rgba(245, 158, 11, 0.12); color: #fcd34d; }
 .badge-default { background: rgba(148, 163, 184, 0.12); color: #cbd5e1; }
+
+.app-shell[data-theme="light"] .search-input,
+.app-shell[data-theme="light"] .stage-filter select,
+.app-shell[data-theme="light"] .filter-button:not(.filter-button-active),
+.app-shell[data-theme="light"] .secondary-button,
+.app-shell[data-theme="light"] .laser-dashboard-card,
+.app-shell[data-theme="light"] .laser-machine-button:not(.laser-machine-button-active),
+.app-shell[data-theme="light"] .laser-load-machine,
+.app-shell[data-theme="light"] .login-panel,
+.app-shell[data-theme="light"] .dropzone,
+.app-shell[data-theme="light"] .job-group,
+.app-shell[data-theme="light"] .step-node {
+  background: var(--panel);
+}
+
+.app-shell[data-theme="light"] .login-field input,
+.app-shell[data-theme="light"] .op-card,
+.app-shell[data-theme="light"] .laser-separation-select {
+  background: var(--panel-alt);
+}
+
+.app-shell[data-theme="light"] .laser-machine-button-active {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.app-shell[data-theme="light"] .integration-eyebrow,
+.app-shell[data-theme="light"] .laser-program-toggle,
+.app-shell[data-theme="light"] .laser-time-total .laser-duration,
+.app-shell[data-theme="light"] .laser-status-progress,
+.app-shell[data-theme="light"] .badge-andamento,
+.app-shell[data-theme="light"] .job-status { color: #0369a1; }
+.app-shell[data-theme="light"] .laser-time-remaining .laser-duration,
+.app-shell[data-theme="light"] .laser-status-partial,
+.app-shell[data-theme="light"] .laser-separation-reschedule { color: #9a3412; }
+.app-shell[data-theme="light"] .laser-time-cut .laser-duration,
+.app-shell[data-theme="light"] .laser-dashboard-counts strong,
+.app-shell[data-theme="light"] .laser-status-complete,
+.app-shell[data-theme="light"] .laser-separation-paid,
+.app-shell[data-theme="light"] .badge-concluida,
+.app-shell[data-theme="light"] .job-status-complete,
+.app-shell[data-theme="light"] .job-percent { color: #166534; }
+.app-shell[data-theme="light"] .laser-separation-pending,
+.app-shell[data-theme="light"] .badge-pendente { color: #92400e; }
+.app-shell[data-theme="light"] .laser-separation-awaiting-pcp { color: #1d4ed8; }
+.app-shell[data-theme="light"] .laser-separation-missing-material,
+.app-shell[data-theme="light"] .step-report-qty,
+.app-shell[data-theme="light"] .integration-table tbody tr.laser-program-not-found td { color: #b91c1c; }
+.app-shell[data-theme="light"] .badge-default { color: #475569; }
 
 .button-icon {
   width: 16px;

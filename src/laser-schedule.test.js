@@ -4,9 +4,11 @@ import ExcelJS from 'exceljs';
 import { estimateLaserHours, formatLaserDuration, groupLaserSchedule, laserJobCounts, laserProgramPercent, laserProgramStatus, parseLaserWorksheet, searchLaserMachines, validLaserSchedule } from './laser-schedule.js';
 
 test('formats decimal hours as hours and minutes', () => {
-  assert.equal(formatLaserDuration(0.83), '0 h 50 min');
-  assert.equal(formatLaserDuration(7.88), '7 h 53 min');
-  assert.equal(formatLaserDuration(1.999), '2 h 0 min');
+  assert.equal(formatLaserDuration(0), '00:00');
+  assert.equal(formatLaserDuration(0.83), '00:50');
+  assert.equal(formatLaserDuration(7.88), '07:53');
+  assert.equal(formatLaserDuration(1.999), '02:00');
+  assert.equal(formatLaserDuration(123.25), '123:15');
 });
 
 test('includes scrap and rework in CL progress, status and hour estimates', () => {

@@ -58,7 +58,7 @@ export function formatLaserDuration(hours) {
   const totalMinutes = Math.round(hours * 60);
   const wholeHours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  return `${wholeHours.toLocaleString('pt-BR')} h ${minutes} min`;
+  return `${String(wholeHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
 export function normalizeOp(value) {
