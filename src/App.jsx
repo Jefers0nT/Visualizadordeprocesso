@@ -465,10 +465,14 @@ export default function App() {
   const [apontamentos, setApontamentos] = useState([]);
   const [search, setSearch] = useState('');
   const [laserSearch, setLaserSearch] = useState('');
+  const [dbraSearch, setDbraSearch] = useState('');
+  const [soldaSearch, setSoldaSearch] = useState('');
   const [filtro, setFiltro] = useState('');
   const [etapaFiltro, setEtapaFiltro] = useState('');
   const [activeView, setActiveView] = useState('production');
   const [selectedMachine, setSelectedMachine] = useState('');
+  const [selectedDbraStation, setSelectedDbraStation] = useState('');
+  const [selectedSoldaStation, setSelectedSoldaStation] = useState('');
   const [over, setOver] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
@@ -898,7 +902,7 @@ export default function App() {
           title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}>
           {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
         </button>
-        <div className={`topbar-inner ${activeView === 'integration' ? 'topbar-inner-wide' : ''}`}>
+        <div className={`topbar-inner ${['integration', 'dobra', 'solda'].includes(activeView) ? 'topbar-inner-wide' : ''}`}>
           <div>
             <h1 className="title">
               <Network className="title-icon" />
@@ -925,7 +929,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`main-panel ${activeView === 'integration' ? 'main-panel-wide' : ''}`}>
+      <main className={`main-panel ${['integration', 'dobra', 'solda'].includes(activeView) ? 'main-panel-wide' : ''}`}>
         {authenticated && isAdmin && (
           <>
             <input
@@ -985,6 +989,24 @@ export default function App() {
               onClick={() => setActiveView('integration')}
             >
               Corte Laser
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeView === 'dobra'}
+              className={`view-tab ${activeView === 'dobra' ? 'view-tab-active' : ''}`}
+              onClick={() => setActiveView('dobra')}
+            >
+              Dobra
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeView === 'solda'}
+              className={`view-tab ${activeView === 'solda' ? 'view-tab-active' : ''}`}
+              onClick={() => setActiveView('solda')}
+            >
+              Solda
             </button>
           </nav>
         )}
@@ -1225,6 +1247,178 @@ export default function App() {
                       ))}
                     </>
                   )}
+                </section>
+            </div>
+          </section>
+        )}
+
+        {authenticated && activeView === 'dobra' && (
+          <section className="integration-panel" role="tabpanel" aria-labelledby="dobra-tab">
+            <header className="integration-heading">
+              <div className="integration-actions">
+                {updatedAt && (
+                  <span className="dataset-updated">
+                    Dados atualizados em {new Date(updatedAt).toLocaleString('pt-BR')}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="secondary-button refresh-button"
+                  onClick={() => loadSharedData({ showToast: true })}
+                  disabled={loading || savingSchedule || savingSeparation}
+                >
+                  <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
+                  Atualizar
+                </button>
+                <button type="button" className="secondary-button" onClick={handleLogout}>Sair</button>
+              </div>
+            </header>
+
+            <div className="integration-production" role="tabpanel" aria-label="Produção Dobra">
+                <section className="laser-load" aria-labelledby="dobra-load-heading">
+                  <div className="integration-section-heading">
+                    <div>
+                      <p className="integration-eyebrow">SEQUENCIAMENTO · DB</p>
+                      <h3 id="dobra-load-heading">Estações de Dobra</h3>
+                      <p className="laser-load-description">
+                        Visão de acompanhamento das etapas de dobra (DB) em processo.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="laser-dashboard" aria-label="Resumo das estações de dobra">
+                    <article className="laser-dashboard-card">
+                      <h4>Estação DB-01</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>5</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB-01">
+                        <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>2</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>Estação DB-02</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>3</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB-02">
+                        <span className="laser-status-complete"><strong>1</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>2</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                  </div>
+                  <div className="laser-search">
+                    <div className="search-wrap">
+                      <Search className="search-icon" aria-hidden="true" />
+                      <input
+                        type="search"
+                        aria-label="Pesquisar em Dobra"
+                        placeholder="Buscar Job, OP ou produto em todas as estações"
+                        className="search-input"
+                        value={dbraSearch}
+                        onChange={(event) => setDbraSearch(event.target.value)}
+                      />
+                    </div>
+                    <p className="laser-load-description">
+                      Pesquise em todas as estações ou selecione uma abaixo.
+                    </p>
+                  </div>
+                  <div className="laser-load-machines" role="group" aria-label="Filtrar por estação de dobra">
+                    <button type="button" className="laser-machine-button laser-machine-button-active" aria-pressed="true">
+                      DB-01
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      DB-02
+                    </button>
+                  </div>
+                </section>
+            </div>
+          </section>
+        )}
+
+        {authenticated && activeView === 'solda' && (
+          <section className="integration-panel" role="tabpanel" aria-labelledby="solda-tab">
+            <header className="integration-heading">
+              <div className="integration-actions">
+                {updatedAt && (
+                  <span className="dataset-updated">
+                    Dados atualizados em {new Date(updatedAt).toLocaleString('pt-BR')}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="secondary-button refresh-button"
+                  onClick={() => loadSharedData({ showToast: true })}
+                  disabled={loading || savingSchedule || savingSeparation}
+                >
+                  <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
+                  Atualizar
+                </button>
+                <button type="button" className="secondary-button" onClick={handleLogout}>Sair</button>
+              </div>
+            </header>
+
+            <div className="integration-production" role="tabpanel" aria-label="Produção Solda">
+                <section className="laser-load" aria-labelledby="solda-load-heading">
+                  <div className="integration-section-heading">
+                    <div>
+                      <p className="integration-eyebrow">SEQUENCIAMENTO · SD</p>
+                      <h3 id="solda-load-heading">Estações de Solda</h3>
+                      <p className="laser-load-description">
+                        Visão de acompanhamento das etapas de solda (SD) em processo.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="laser-dashboard" aria-label="Resumo das estações de solda">
+                    <article className="laser-dashboard-card">
+                      <h4>Estação SD-01</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>4</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD-01">
+                        <span className="laser-status-complete"><strong>3</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>Estação SD-02</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>2</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD-02">
+                        <span className="laser-status-complete"><strong>1</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                  </div>
+                  <div className="laser-search">
+                    <div className="search-wrap">
+                      <Search className="search-icon" aria-hidden="true" />
+                      <input
+                        type="search"
+                        aria-label="Pesquisar em Solda"
+                        placeholder="Buscar Job, OP ou produto em todas as estações"
+                        className="search-input"
+                        value={soldaSearch}
+                        onChange={(event) => setSoldaSearch(event.target.value)}
+                      />
+                    </div>
+                    <p className="laser-load-description">
+                      Pesquise em todas as estações ou selecione uma abaixo.
+                    </p>
+                  </div>
+                  <div className="laser-load-machines" role="group" aria-label="Filtrar por estação de solda">
+                    <button type="button" className="laser-machine-button laser-machine-button-active" aria-pressed="true">
+                      SD-01
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD-02
+                    </button>
+                  </div>
                 </section>
             </div>
           </section>
