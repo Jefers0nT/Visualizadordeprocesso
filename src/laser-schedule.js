@@ -93,11 +93,13 @@ export function validLaserSchedule(rows) {
       && Number.isFinite(row.hours) && row.hours >= 0 && row.hours <= 100_000
       && Number.isSafeInteger(row.sequence) && row.sequence >= 0
       && Array.isArray(row.ops) && row.ops.length > 0 && row.ops.length <= 1000
-      && row.ops.every((op) => typeof op === 'string' && op.trim().length > 0 && op.length <= 100));
+      && row.ops.every((op) => typeof op === 'string' && op.trim().length > 0 && op.length <= 100)
+      && (!row.mp || (typeof row.mp === 'string' && row.mp.length <= 200)));
 }
 
 export function parseLaserWorksheet(worksheet) {
   const required = ['maquina', 'seq', 'programa', 'tempo (h)', 'ops'];
+  const optional = ['mp'];
   let columns;
   const rows = [];
   worksheet.eachRow((row, rowNumber) => {
@@ -117,8 +119,9 @@ export function parseLaserWorksheet(worksheet) {
     const sequence = typeof sequenceValue === 'number' ? sequenceValue : Number.NaN;
     const ops = row.getCell(columns.get('ops')).text.split(/[,;\n]+/)
       .map((op) => op.trim()).filter(Boolean);
+    const mp = columns.has('mp') ? row.getCell(columns.get('mp')).text.trim() : '';
     if (!machine && !program && !ops.length) return;
-    const entry = { machine, program, hours, sequence, ops };
+    const entry = { machine, program, hours, sequence, ops, mp };
     if (!validLaserSchedule([entry])) {
       throw new Error(`Dados inválidos na linha ${rowNumber} da planilha de sequenciamento.`);
     }

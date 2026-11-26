@@ -192,7 +192,6 @@ function buildTree(ops, ordens, apontamentos = []) {
       job,
       desc: final['Desc Prod'],
       qtd: num(final['Quantidade']),
-      entrega: dt(final['Entrega']),
       steps,
       emissao: steps.map((step) => step.emissao).filter(Boolean).sort(
         (a, b) => dateSortValue(a) - dateSortValue(b),
@@ -394,6 +393,7 @@ function LaserProgramRow({ program, isAdmin, separation, savingSeparation, onSep
         </td>
         <td><LaserDuration hours={program.hours} className="laser-table-load" /></td>
         <td>{program.found ? `${program.reported.toLocaleString('pt-BR')} / ${program.planned.toLocaleString('pt-BR')}` : '—'}</td>
+        <td>{program.mp || '—'}</td>
         <td>
           {separation === null || !separationOption ? (
             <span>Indisponível</span>
@@ -489,8 +489,16 @@ export default function App() {
   const [separationStatuses, setSeparationStatuses] = useState(null);
   const [separationError, setSeparationError] = useState('');
   const [savingSeparation, setSavingSeparation] = useState(false);
+  const [dobraSchedule, setDobraSchedule] = useState({ rows: [], updatedAt: null });
+  const [dobraScheduleError, setDobraScheduleError] = useState('');
+  const [savingDobraSchedule, setSavingDobraSchedule] = useState(false);
+  const [soldaSchedule, setSoldaSchedule] = useState({ rows: [], updatedAt: null });
+  const [soldaScheduleError, setSoldaScheduleError] = useState('');
+  const [savingSoldaSchedule, setSavingSoldaSchedule] = useState(false);
   const fileRef = useRef(null);
   const scheduleFileRef = useRef(null);
+  const dobraScheduleFileRef = useRef(null);
+  const soldaScheduleFileRef = useRef(null);
   const dirRef = useRef(null);
   const loadSharedData = useCallback(async ({ showToast = false } = {}) => {
     setLoading(true);
@@ -753,6 +761,99 @@ export default function App() {
     }
   };
 
+  const parseGenericWorksheet = (worksheet) => {
+    const rows = [];
+    if (!worksheet) return rows;
+    
+    const headerRow = worksheet.getRow(1);
+    if (!headerRow) return rows;
+    
+    const headers = [];
+    headerRow.eachCell((cell) => {
+      headers.push(String(cell.value || '').trim());
+    });
+    
+    for (let rowNum = 2; rowNum <= worksheet.rowCount; rowNum++) {
+      const row = worksheet.getRow(rowNum);
+      if (!row) break;
+      
+      const data = {};
+      let isEmpty = true;
+      row.eachCell((cell, colNum) => {
+        const header = headers[colNum - 1];
+        if (header) {
+          const value = cell.value;
+          if (value !== null && value !== undefined) {
+            data[header] = String(value).trim();
+            isEmpty = false;
+          } else {
+            data[header] = '';
+          }
+        }
+      });
+      
+      if (!isEmpty && Object.values(data).some(v => v)) {
+        rows.push(data);
+      }
+    }
+    
+    return rows;
+  };
+
+  const handleDobraSchedule = async (file) => {
+    if (!file || !isAdmin || savingDobraSchedule) return;
+    setSavingDobraSchedule(true);
+    try {
+      if (!/\.xlsx$/i.test(file.name)) throw new Error('Selecione uma planilha XLSX.');
+      if (file.size > 10 * 1024 * 1024) throw new Error('A planilha excede 10 MiB.');
+      const { default: ExcelJS } = await import('exceljs/dist/exceljs.min.js');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await file.arrayBuffer());
+      const worksheet = workbook.getWorksheet('Sequenciamento dobra') || workbook.getWorksheet('Dobra') || workbook.worksheets[0];
+      if (!worksheet) throw new Error('A planilha não contém nenhuma aba.');
+      const rows = parseGenericWorksheet(worksheet);
+      const body = JSON.stringify(rows);
+      if (new TextEncoder().encode(body).byteLength > MAX_LASER_SCHEDULE_BYTES) {
+        throw new Error('O sequenciamento processado excede 1 MiB.');
+      }
+      const result = await fetchApi('/api/dobra-schedule', { method: 'PUT', body });
+      setDobraSchedule({ rows, updatedAt: result.updatedAt });
+      setDobraScheduleError('');
+      toast.success(`${rows.length} etapa(s) de dobra importada(s) para todos os usuários.`);
+    } catch (error) {
+      toast.error(`Não foi possível importar o sequenciamento de dobra: ${error.message}`);
+    } finally {
+      setSavingDobraSchedule(false);
+    }
+  };
+
+  const handleSoldaSchedule = async (file) => {
+    if (!file || !isAdmin || savingSoldaSchedule) return;
+    setSavingSoldaSchedule(true);
+    try {
+      if (!/\.xlsx$/i.test(file.name)) throw new Error('Selecione uma planilha XLSX.');
+      if (file.size > 10 * 1024 * 1024) throw new Error('A planilha excede 10 MiB.');
+      const { default: ExcelJS } = await import('exceljs/dist/exceljs.min.js');
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(await file.arrayBuffer());
+      const worksheet = workbook.getWorksheet('Sequenciamento solda') || workbook.getWorksheet('Solda') || workbook.worksheets[0];
+      if (!worksheet) throw new Error('A planilha não contém nenhuma aba.');
+      const rows = parseGenericWorksheet(worksheet);
+      const body = JSON.stringify(rows);
+      if (new TextEncoder().encode(body).byteLength > MAX_LASER_SCHEDULE_BYTES) {
+        throw new Error('O sequenciamento processado excede 1 MiB.');
+      }
+      const result = await fetchApi('/api/solda-schedule', { method: 'PUT', body });
+      setSoldaSchedule({ rows, updatedAt: result.updatedAt });
+      setSoldaScheduleError('');
+      toast.success(`${rows.length} etapa(s) de solda importada(s) para todos os usuários.`);
+    } catch (error) {
+      toast.error(`Não foi possível importar o sequenciamento de solda: ${error.message}`);
+    } finally {
+      setSavingSoldaSchedule(false);
+    }
+  };
+
   const tree = useMemo(() => buildTree(ops, ordens, apontamentos), [ops, ordens, apontamentos]);
   const allOps = useMemo(() => tree.flatMap(([, list]) => list), [tree]);
   const allSteps = useMemo(() => allOps.flatMap((op) => op.steps), [allOps]);
@@ -964,6 +1065,28 @@ export default function App() {
               disabled={savingSchedule}
               onChange={(event) => {
                 handleLaserSchedule(event.target.files[0]);
+                event.target.value = '';
+              }}
+            />
+            <input
+              ref={dobraScheduleFileRef}
+              type="file"
+              accept=".xlsx"
+              hidden
+              disabled={savingDobraSchedule}
+              onChange={(event) => {
+                handleDobraSchedule(event.target.files[0]);
+                event.target.value = '';
+              }}
+            />
+            <input
+              ref={soldaScheduleFileRef}
+              type="file"
+              accept=".xlsx"
+              hidden
+              disabled={savingSoldaSchedule}
+              onChange={(event) => {
+                handleSoldaSchedule(event.target.files[0]);
                 event.target.value = '';
               }}
             />
@@ -1227,7 +1350,7 @@ export default function App() {
                         ) : (
                           <div className="integration-table-wrap">
                             <table className="integration-table">
-                              <thead><tr><th>Seq</th><th>Programa</th><th>Carga</th><th>Reportado / planejado</th><th>Separação</th><th>Progresso CL</th><th>Status</th></tr></thead>
+                              <thead><tr><th>Seq</th><th>Programa</th><th>Carga</th><th>Reportado / planejado</th><th>MP</th><th>Separação</th><th>Progresso CL</th><th>Status</th></tr></thead>
                               <tbody>
                                 {machine.programs.map((program, index) => (
                                   <LaserProgramRow
@@ -1265,11 +1388,22 @@ export default function App() {
                   type="button"
                   className="secondary-button refresh-button"
                   onClick={() => loadSharedData({ showToast: true })}
-                  disabled={loading || savingSchedule || savingSeparation}
+                  disabled={loading || savingDobraSchedule}
                 >
                   <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
                   Atualizar
                 </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => dobraScheduleFileRef.current?.click()}
+                    disabled={savingDobraSchedule || loading}
+                  >
+                    <FileSpreadsheet className="button-icon" />
+                    {savingDobraSchedule ? 'Importando...' : 'Importar sequenciamento XLSX'}
+                  </button>
+                )}
                 <button type="button" className="secondary-button" onClick={handleLogout}>Sair</button>
               </div>
             </header>
@@ -1283,29 +1417,78 @@ export default function App() {
                       <p className="laser-load-description">
                         Visão de acompanhamento das etapas de dobra (DB) em processo.
                       </p>
+                      {dobraSchedule.updatedAt && (
+                        <span className="dataset-updated">
+                          Sequenciamento importado em {new Date(dobraSchedule.updatedAt).toLocaleString('pt-BR')}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div className="laser-dashboard" aria-label="Resumo das estações de dobra">
+                  <div className="laser-dashboard" aria-label="Resumo das máquinas de dobra">
                     <article className="laser-dashboard-card">
-                      <h4>Estação DB-01</h4>
+                      <h4>DB001 - DOBRA 1 PBS 135/3000 GASPA</h4>
                       <div className="laser-dashboard-counts">
                         <span><strong>5</strong> Job(s) em andamento</span>
                       </div>
-                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB-01">
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB001">
                         <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
                         <span className="laser-status-partial"><strong>2</strong> Em andamento</span>
                         <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
                       </div>
                     </article>
                     <article className="laser-dashboard-card">
-                      <h4>Estação DB-02</h4>
+                      <h4>DB002 - DOBRA 2 PBS 40/1250 GASPA</h4>
                       <div className="laser-dashboard-counts">
                         <span><strong>3</strong> Job(s) em andamento</span>
                       </div>
-                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB-02">
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB002">
                         <span className="laser-status-complete"><strong>1</strong> Concluídos</span>
                         <span className="laser-status-partial"><strong>2</strong> Em andamento</span>
                         <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>DB003 - DOBRA 3 XACT SMART 160/3100</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>4</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB003">
+                        <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>DB004 - DOBRA 4 AD-S 135/3050 DURMA</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>3</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB004">
+                        <span className="laser-status-complete"><strong>1</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>DB005 - DOBRA 5 PBC 50/2050 YAWEI</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>2</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB005">
+                        <span className="laser-status-complete"><strong>1</strong> Concluído</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>DB006 - DOBRADEIRA G-BEND 200</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>4</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de DB006">
+                        <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
                       </div>
                     </article>
                   </div>
@@ -1325,12 +1508,24 @@ export default function App() {
                       Pesquise em todas as estações ou selecione uma abaixo.
                     </p>
                   </div>
-                  <div className="laser-load-machines" role="group" aria-label="Filtrar por estação de dobra">
+                  <div className="laser-load-machines" role="group" aria-label="Filtrar por máquina de dobra">
                     <button type="button" className="laser-machine-button laser-machine-button-active" aria-pressed="true">
-                      DB-01
+                      DB001
                     </button>
                     <button type="button" className="laser-machine-button" aria-pressed="false">
-                      DB-02
+                      DB002
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      DB003
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      DB004
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      DB005
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      DB006
                     </button>
                   </div>
                 </section>
@@ -1351,11 +1546,22 @@ export default function App() {
                   type="button"
                   className="secondary-button refresh-button"
                   onClick={() => loadSharedData({ showToast: true })}
-                  disabled={loading || savingSchedule || savingSeparation}
+                  disabled={loading || savingSoldaSchedule}
                 >
                   <RefreshCw className={`button-icon ${loading ? 'refreshing' : ''}`} />
                   Atualizar
                 </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => soldaScheduleFileRef.current?.click()}
+                    disabled={savingSoldaSchedule || loading}
+                  >
+                    <FileSpreadsheet className="button-icon" />
+                    {savingSoldaSchedule ? 'Importando...' : 'Importar sequenciamento XLSX'}
+                  </button>
+                )}
                 <button type="button" className="secondary-button" onClick={handleLogout}>Sair</button>
               </div>
             </header>
@@ -1369,27 +1575,109 @@ export default function App() {
                       <p className="laser-load-description">
                         Visão de acompanhamento das etapas de solda (SD) em processo.
                       </p>
+                      {soldaSchedule.updatedAt && (
+                        <span className="dataset-updated">
+                          Sequenciamento importado em {new Date(soldaSchedule.updatedAt).toLocaleString('pt-BR')}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <div className="laser-dashboard" aria-label="Resumo das estações de solda">
+                  <div className="laser-dashboard" aria-label="Resumo das máquinas de solda">
                     <article className="laser-dashboard-card">
-                      <h4>Estação SD-01</h4>
+                      <h4>SD001 - SOLDA - 1 TPS 320I</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>5</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD001">
+                        <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>2</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>SD002 - SOLDA MIG 2</h4>
                       <div className="laser-dashboard-counts">
                         <span><strong>4</strong> Job(s) em andamento</span>
                       </div>
-                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD-01">
-                        <span className="laser-status-complete"><strong>3</strong> Concluídos</span>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD002">
+                        <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>SD003 - SOLDA MIG 3</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>3</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD003">
+                        <span className="laser-status-complete"><strong>1</strong> Concluído</span>
+                        <span className="laser-status-partial"><strong>2</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>SD004 - SOLDA MIG 4</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>3</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD004">
+                        <span className="laser-status-complete"><strong>1</strong> Concluído</span>
+                        <span className="laser-status-partial"><strong>2</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>SD005 - SOLDA MIG 5</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>2</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD005">
+                        <span className="laser-status-complete"><strong>1</strong> Concluído</span>
                         <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
                         <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
                       </div>
                     </article>
                     <article className="laser-dashboard-card">
-                      <h4>Estação SD-02</h4>
+                      <h4>SD006 - SOLDA TRANSPOCKET 1500 (INVERS</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>4</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD006">
+                        <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>SD007 - SOLDA PONTO</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>3</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD007">
+                        <span className="laser-status-complete"><strong>1</strong> Concluído</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>1</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>SD008 - SOLDA ROBO MOTOMAN MA 1900</h4>
                       <div className="laser-dashboard-counts">
                         <span><strong>2</strong> Job(s) em andamento</span>
                       </div>
-                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD-02">
-                        <span className="laser-status-complete"><strong>1</strong> Concluídos</span>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD008">
+                        <span className="laser-status-complete"><strong>1</strong> Concluído</span>
+                        <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
+                        <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
+                      </div>
+                    </article>
+                    <article className="laser-dashboard-card">
+                      <h4>SD009 - SOLDA ROBO MOKA</h4>
+                      <div className="laser-dashboard-counts">
+                        <span><strong>3</strong> Job(s) em andamento</span>
+                      </div>
+                      <div className="laser-dashboard-statuses" aria-label="Status dos Jobs de SD009">
+                        <span className="laser-status-complete"><strong>2</strong> Concluídos</span>
                         <span className="laser-status-partial"><strong>1</strong> Em andamento</span>
                         <span className="laser-status-progress"><strong>0</strong> Pendentes</span>
                       </div>
@@ -1411,12 +1699,33 @@ export default function App() {
                       Pesquise em todas as estações ou selecione uma abaixo.
                     </p>
                   </div>
-                  <div className="laser-load-machines" role="group" aria-label="Filtrar por estação de solda">
+                  <div className="laser-load-machines" role="group" aria-label="Filtrar por máquina de solda">
                     <button type="button" className="laser-machine-button laser-machine-button-active" aria-pressed="true">
-                      SD-01
+                      SD001
                     </button>
                     <button type="button" className="laser-machine-button" aria-pressed="false">
-                      SD-02
+                      SD002
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD003
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD004
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD005
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD006
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD007
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD008
+                    </button>
+                    <button type="button" className="laser-machine-button" aria-pressed="false">
+                      SD009
                     </button>
                   </div>
                 </section>

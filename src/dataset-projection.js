@@ -1,6 +1,6 @@
 export const DATASET_COLUMNS = {
-  ops: ['Numero da OP', 'Sequencia', 'Job de Corte', 'Quantidade', 'OP', 'Produto', 'DT Emissão', 'Desc Prod', 'Entrega'],
-  ordens: ['Ord Prod', 'Quantidade', 'Grup Estoque', 'Descrição GE', 'Quant Rep', 'Quant Retrab', 'Quant Refug', 'DT Emissão', 'Inicio Ordem', 'Fim Ordem'],
+  ops: ['Numero da OP', 'Sequencia', 'Job de Corte', 'Quantidade', 'OP', 'Produto', 'DT Emissão', 'Desc Prod'],
+  ordens: ['Ord Prod', 'Quantidade', 'Grup Estoque', 'Descrição GE', 'Quant Rep', 'Quant Retrab', 'Quant Refug', 'Inicio Ordem', 'Fim Ordem'],
 };
 const VIEW_COLUMNS = {
   ...DATASET_COLUMNS,
